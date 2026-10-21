@@ -34,15 +34,20 @@ jobs:
 
   build:
     name: 构建 ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        # musl 目标是全静态链接，扔到任何 Linux 都能跑，不挑 glibc 版本。
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
-          - x86_64-unknown-linux-gnu
+        include:
+          # musl 目标是全静态链接，扔到任何 Linux 都能跑，不挑 glibc 版本。
+          # rustls 依赖的 ring 是 C 代码，musl 目标需要 musl-gcc。
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          # ARM 用原生 ARM runner 编译，避免交叉编译 aarch64-musl 的工具链折腾。
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +58,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      - name: 装 musl 工具链
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: 构建
         run: cargo build --release --target ${{ matrix.target }}

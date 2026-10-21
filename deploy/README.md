@@ -13,9 +13,8 @@
 
 ## 一、拿到二进制
 
-### 方案 A：让 GitHub Actions 编（推荐）
-
-仓库里有 CI，推送后自动构建三个 Linux 目标：
+**在 GitHub 上构建**——仓库自带 CI，推送后自动产出三个 Linux 目标，
+服务器上**不需要装 Rust**，本地也不用交叉编译：
 
 | 目标 | 说明 |
 |---|---|
@@ -23,43 +22,34 @@
 | `aarch64-unknown-linux-musl` | 全静态，ARM 服务器（倚天 / Graviton） |
 | `x86_64-unknown-linux-gnu` | 动态链接，依赖 glibc 2.35+ |
 
-在 [Releases](https://github.com/IQZZ020501/hey-bot/releases) 下下载
-`heybot-<版本>-<target>` 即可；每次推送的构建产物也挂在 Actions 页面。
+### 下载
+
+打 tag（`v0.1.0`）会自动发一个
+[Release](https://github.com/IQZZ020501/hey-bot/releases)，里面是三个二进制、
+`SHA256SUMS` 和 `deploy/` 部署脚本：
 
 ```bash
 gh release download v0.1.0 -p '*x86_64-unknown-linux-musl*' -D /tmp
 scp /tmp/heybot-v0.1.0-x86_64-unknown-linux-musl server:/tmp/heybot
 ```
 
-或者在本地拉 Actions 产物：
+不想打 tag 的话，每次推送的构建产物也挂在 Actions 页面：
 
 ```bash
 gh run download --repo IQZZ020501/hey-bot
 ```
 
-### 方案 B：本地交叉编译
+### 自己触发一次
+
+改完代码想立刻验证能不能编，在 Actions 页面点 **CI → Run workflow**，
+或者：
 
 ```bash
-rustup target add x86_64-unknown-linux-musl
-cargo build --release --target x86_64-unknown-linux-musl
-# target/x86_64-unknown-linux-musl/release/heybot
+gh workflow run ci.yml --repo IQZZ020501/hey-bot
 ```
 
-`linux-musl` 产出的是**完全静态链接**的二进制（自带 libc），
-扔到任何 x86_64 Linux 上都能跑，不依赖 glibc 版本。
-
-> ARM 服务器把 target 换成 `aarch64-unknown-linux-musl` 即可。
-
-### 方案 C：在服务器上直接编译
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-git clone https://github.com/IQZZ020501/hey-bot.git && cd hey-bot
-cargo build --release
-```
-
-用的是 `rustls` 而不是 `openssl`，**不需要装 libssl-dev**。
+> musl 目标是**全静态链接**（自带 libc），扔到任何 x86_64 Linux 上都能跑，
+> 不挑 glibc 版本。
 
 ---
 

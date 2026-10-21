@@ -172,12 +172,17 @@ bot.on_message(|msg| async move {
 
 完整步骤见 [`deploy/README.md`](deploy/README.md)，这里只列骨架。
 
-**构建**——本地交叉编译成静态二进制，扔到任何 x86_64 Linux 都能跑：
+**构建**——推给 GitHub Actions 编，产物在 Releases 里下载：
+
+| 目标 | 说明 |
+|---|---|
+| `x86_64-unknown-linux-musl` | 全静态，x86_64 服务器通用 |
+| `aarch64-unknown-linux-musl` | 全静态，ARM 服务器 |
+| `x86_64-unknown-linux-gnu` | 动态链接，依赖 glibc 2.35+ |
 
 ```bash
-rustup target add x86_64-unknown-linux-musl
-cargo build --release --target x86_64-unknown-linux-musl
-# target/x86_64-unknown-linux-musl/release/heybot
+gh release download v0.1.0 -p '*x86_64-unknown-linux-musl*' -D /tmp
+scp /tmp/heybot-v0.1.0-x86_64-unknown-linux-musl server:/tmp/heybot
 ```
 
 用 `rustls` 而非 `openssl`，服务器上不需要装 `libssl-dev`。
