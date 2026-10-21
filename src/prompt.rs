@@ -87,7 +87,7 @@ impl Prompts {
         prompts
     }
 
-    /// 从配置加载：`HEYBOT_PROMPT_DIR` 优先，否则用项目根的 `prompts/`。
+    /// 从配置加载：`HEYBOT_PROMPT_DIR` 优先，否则用项目根的 `prompts/`（不存在则用内置模板）。
     pub fn from_config() -> Result<Self> {
         if let Some(dir) = crate::config::optional("HEYBOT_PROMPT_DIR") {
             return Ok(Self::load(Path::new(&dir)));

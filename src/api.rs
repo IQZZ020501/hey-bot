@@ -8,8 +8,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue, REFERER, USER_AGENT};
 use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderValue, REFERER, USER_AGENT};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -82,7 +82,8 @@ impl HeyboxApi {
     /// 把已知 Cookie 写进 cookie jar。
     fn seed_cookies(&self, session: &Session) {
         for cookie in &session.cookies {
-            self.jar.insert(&cookie.name, &cookie.value, &cookie.domain, &cookie.path);
+            self.jar
+                .insert(&cookie.name, &cookie.value, &cookie.domain, &cookie.path);
         }
     }
 
@@ -103,7 +104,10 @@ impl HeyboxApi {
             REFERER,
             HeaderValue::from_static("https://www.xiaoheihe.cn/"),
         );
-        headers.insert("x-requested-with", HeaderValue::from_static("XMLHttpRequest"));
+        headers.insert(
+            "x-requested-with",
+            HeaderValue::from_static("XMLHttpRequest"),
+        );
         Ok(headers)
     }
 
@@ -214,7 +218,10 @@ impl HeyboxApi {
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Err(Error::RateLimit);
         }
-        let text = response.text().await.map_err(|error| Error::Network(error.to_string()))?;
+        let text = response
+            .text()
+            .await
+            .map_err(|error| Error::Network(error.to_string()))?;
         let data: Value = serde_json::from_str(&text)
             .map_err(|_| Error::Protocol(format!("响应不是合法 JSON：{text}")))?;
 
@@ -223,7 +230,10 @@ impl HeyboxApi {
 
         match data.get("status").and_then(Value::as_str) {
             Some("ok") => Ok(data),
-            Some("relogin") | Some("not_login") | Some("need_login") | Some("login_required")
+            Some("relogin")
+            | Some("not_login")
+            | Some("need_login")
+            | Some("login_required")
             | Some("need_google_check") => Err(Error::Auth),
             Some("show_captcha") | Some("need_captcha") => Err(Error::Captcha),
             Some("failed") | Some("error") => {
@@ -279,7 +289,7 @@ impl HeyboxApi {
         let user_id = crate::auth::read_user_id(&data).ok_or_else(|| {
             Error::Protocol(format!(
                 "响应里没有账号标识，原始响应：{}",
-                &data.to_string().chars().take(300).collect::<String>()
+                data.to_string().chars().take(300).collect::<String>()
             ))
         })?;
         let nickname = data

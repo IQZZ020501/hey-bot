@@ -108,8 +108,8 @@ pub fn save_session(path: &Path, session: &Session) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| Error::Storage(error.to_string()))?;
     }
-    let json = serde_json::to_string_pretty(session)
-        .map_err(|error| Error::Storage(error.to_string()))?;
+    let json =
+        serde_json::to_string_pretty(session).map_err(|error| Error::Storage(error.to_string()))?;
     std::fs::write(path, json).map_err(|error| Error::Storage(error.to_string()))?;
     restrict(path);
     Ok(())
@@ -123,8 +123,8 @@ pub fn load_session(path: &Path) -> Result<Session> {
     if !path.exists() {
         return Ok(Session::default());
     }
-    let content = std::fs::read_to_string(path)
-        .map_err(|error| Error::Storage(error.to_string()))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|error| Error::Storage(error.to_string()))?;
     if content.trim().is_empty() {
         return Ok(Session::default());
     }

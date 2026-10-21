@@ -112,7 +112,13 @@ pub async fn collect(api: &HeyboxApi, mention: &Mention) -> Result<Context> {
     }
 
     // 找触发评论，以及它挂在哪。
-    let trigger = find_comment(api, &mention.link_id, &mention.root_id, &mention.comment_a_id).await?;
+    let trigger = find_comment(
+        api,
+        &mention.link_id,
+        &mention.root_id,
+        &mention.comment_a_id,
+    )
+    .await?;
 
     match trigger {
         Some(trigger) if !trigger.reply_id.is_empty() && trigger.reply_id != trigger.id => {
@@ -186,13 +192,22 @@ pub async fn collect_floor(
                 break;
             }
             for group in &groups {
-                for comment in group.get("comment").and_then(|v| v.as_array()).unwrap_or(&Vec::new()) {
+                for comment in group
+                    .get("comment")
+                    .and_then(|v| v.as_array())
+                    .unwrap_or(&Vec::new())
+                {
                     if let Some(info) = comment_info(comment) {
                         items.push(info);
                     }
                 }
             }
-            if data.pointer("/result/has_more_floors").and_then(|v| v.as_i64()).unwrap_or(0) == 0 {
+            if data
+                .pointer("/result/has_more_floors")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                == 0
+            {
                 break;
             }
         }
@@ -208,7 +223,11 @@ pub async fn collect_floor(
             .cloned()
             .unwrap_or_default();
         for group in &groups {
-            for comment in group.get("comment").and_then(|v| v.as_array()).unwrap_or(&Vec::new()) {
+            for comment in group
+                .get("comment")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&Vec::new())
+            {
                 if let Some(info) = comment_info(comment) {
                     if info.id == root_id {
                         items.push(info);
@@ -219,7 +238,12 @@ pub async fn collect_floor(
         if groups.is_empty() {
             break;
         }
-        if data.pointer("/result/has_more_floors").and_then(|v| v.as_i64()).unwrap_or(0) == 0 {
+        if data
+            .pointer("/result/has_more_floors")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            == 0
+        {
             break;
         }
     }

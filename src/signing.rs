@@ -81,7 +81,10 @@ pub fn sign(path: &str, timestamp: i64, nonce: &str) -> String {
     );
 
     // 时间分量用 +1，与网页端保持一致。
-    let time_part = map_chars(&(timestamp + 1).to_string(), &ALPHABET[..ALPHABET.len() - 2]);
+    let time_part = map_chars(
+        &(timestamp + 1).to_string(),
+        &ALPHABET[..ALPHABET.len() - 2],
+    );
     let path_part = map_chars(&normalized, ALPHABET);
     let nonce_part = map_chars(nonce, ALPHABET);
 
@@ -186,7 +189,10 @@ pub fn workshop_params(params: &[(String, String)]) -> Result<Vec<(String, Strin
     mac.update(message.as_bytes());
     let digest = hex::encode(mac.finalize().into_bytes());
 
-    Ok(vec![("_rnd".into(), format!("{WORKSHOP_VERSION}:{digest}"))])
+    Ok(vec![(
+        "_rnd".into(),
+        format!("{WORKSHOP_VERSION}:{digest}"),
+    )])
 }
 
 /// 当前 Unix 秒。
@@ -306,7 +312,10 @@ mod tests {
     #[test]
     fn workshop_signature_has_expected_shape() {
         let params = vec![
-            ("nonce".to_string(), "3D6891C5FEBD5A0A4C986784D2F60E81".to_string()),
+            (
+                "nonce".to_string(),
+                "3D6891C5FEBD5A0A4C986784D2F60E81".to_string(),
+            ),
             ("_time".to_string(), "1770529394".to_string()),
         ];
         let extra = workshop_params(&params).expect("Workshop 签名");

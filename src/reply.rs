@@ -75,8 +75,7 @@ impl DedupStore {
             .map(|value| value.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(&self.path, content)
-            .map_err(|error| Error::Storage(error.to_string()))?;
+        std::fs::write(&self.path, content).map_err(|error| Error::Storage(error.to_string()))?;
         crate::store::restrict(&self.path);
         Ok(())
     }
@@ -119,13 +118,30 @@ pub fn default_policy() -> ReplyPolicy {
     }
 }
 
+/// 构造策略：默认用 `src/prompt.rs` 的内置模板；
+/// 若存在 `prompts/` 目录（或 `HEYBOT_PROMPT_DIR`），则用其覆盖，改风格不用重编译。
+///
+/// 加载失败时回落到内置模板，不影响运行。
+pub fn policy_with_prompts() -> ReplyPolicy {
+    let mut policy = default_policy();
+    match crate::prompt::Prompts::from_config() {
+        Ok(prompts) => policy.prompts = prompts,
+        Err(error) => tracing::warn!("加载 prompt 模板失败，使用内置默认：{error}"),
+    }
+    policy
+}
+
 /// 构造给 AI 的上下文。
 ///
 /// 把「要评价什么」明确告诉模型，否则它只知道有人在 @ 它，
 /// 会反问「你要我评价什么」。
 ///
-/// 具体措辞由 `prompts/reply_*.txt` 模板决定，这里只负责填占位符。
-pub fn build_prompt(mention: &Mention, context: &Context, prompts: &crate::prompt::Prompts) -> String {
+/// 具体措辞由 reply_comment / reply_post 模板决定，这里只负责填占位符。
+pub fn build_prompt(
+    mention: &Mention,
+    context: &Context,
+    prompts: &crate::prompt::Prompts,
+) -> String {
     let mut values: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
     values.insert("post_title", context.post_title.clone());
     values.insert("post_author", context.post_author.clone());
@@ -233,14 +249,9 @@ pub async fn prepare(
 ///
 /// 这是整条链路里唯一不受小黑盒接口限速约束的 IO，
 /// 所以常驻模式把它并发做。
-pub async fn generate(
-    ai: &AiClient,
-    policy: &ReplyPolicy,
-    prepared: &Prepared,
-) -> Result<String> {
+pub async fn generate(ai: &AiClient, policy: &ReplyPolicy, prepared: &Prepared) -> Result<String> {
     let _ = &prepared.context;
-    ai.complete(&policy.prompts.system, &prepared.prompt)
-        .await
+    ai.complete(&policy.prompts.system, &prepared.prompt).await
 }
 
 /// 阶段三：把回复发出去。

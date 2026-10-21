@@ -65,7 +65,7 @@ pub async fn fetch_qrcode(api: &HeyboxApi) -> Result<QrCode> {
         .ok_or_else(|| {
             Error::Protocol(format!(
                 "响应里没有二维码地址，原始响应：{}",
-                &data.to_string().chars().take(300).collect::<String>()
+                data.to_string().chars().take(300).collect::<String>()
             ))
         })?
         .to_string();
@@ -105,10 +105,7 @@ pub async fn poll_qr_state(api: &HeyboxApi, qr_id: &str) -> Result<(QrState, Val
         .await?;
 
     let result = data.get("result").cloned().unwrap_or(Value::Null);
-    let state = result
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let state = result.get("error").and_then(Value::as_str).unwrap_or("");
     let message = result
         .get("error_msg")
         .and_then(Value::as_str)
@@ -285,7 +282,7 @@ pub async fn verify_session(api: &HeyboxApi) -> Result<String> {
     read_user_id(&data).ok_or_else(|| {
         Error::Protocol(format!(
             "会话校验失败：响应里没有账号标识，原始响应：{}",
-            &data.to_string().chars().take(400).collect::<String>()
+            data.to_string().chars().take(400).collect::<String>()
         ))
     })
 }
@@ -411,9 +408,6 @@ mod tests {
             .map(|cookie| cookie.value.clone());
         assert_eq!(user.as_deref(), Some("42"));
         // 同一个名字不能出现两次。
-        assert_eq!(
-            names.iter().filter(|name| **name == "heybox_id").count(),
-            1
-        );
+        assert_eq!(names.iter().filter(|name| **name == "heybox_id").count(), 1);
     }
 }

@@ -21,7 +21,7 @@ use anyhow::Result;
 use heybot::ai::AiClient;
 use heybot::api::HeyboxApi;
 use heybot::error::Error;
-use heybot::reply::{ReplyOutcome, default_policy};
+use heybot::reply::ReplyOutcome;
 
 fn usage() -> &'static str {
     "用法：
@@ -102,20 +102,12 @@ async fn cmd_probe() -> Result<()> {
         } else {
             "签名通过"
         };
-        println!("{verdict}  {}  status={} msg={}", result.path, result.status, result.message);
+        println!(
+            "{verdict}  {}  status={} msg={}",
+            result.path, result.status, result.message
+        );
     }
     Ok(())
-}
-
-/// 构造策略：默认用 `src/prompt.rs` 的内置模板；
-/// 若存在 `prompts/` 目录（或 `HEYBOT_PROMPT_DIR`），则用其覆盖，改风格不用重编译。
-fn policy_with_prompts() -> reply::ReplyPolicy {
-    let mut policy = default_policy();
-    match heybot::prompt::Prompts::from_config() {
-        Ok(prompts) => policy.prompts = prompts,
-        Err(error) => tracing::warn!("加载 prompt 模板失败，使用内置默认：{error}"),
-    }
-    policy
 }
 
 /// 构造带会话的 API 客户端。
@@ -159,8 +151,7 @@ async fn login_interactive() -> Result<heybot::api::Session> {
         println!("请用小黑盒 App 扫描上面的二维码。");
     } else {
         let svg = auth::qr_svg(&qr.url)?;
-        let qr_path =
-            std::env::temp_dir().join(format!("heybot-qr-{}.svg", std::process::id()));
+        let qr_path = std::env::temp_dir().join(format!("heybot-qr-{}.svg", std::process::id()));
         std::fs::write(&qr_path, svg)?;
         println!("当前终端不支持二维码渲染，请打开这个文件：");
         println!("  {}", qr_path.display());
@@ -186,11 +177,7 @@ async fn ensure_session() -> Result<(heybot::api::Session, String)> {
     if !session.cookies.is_empty() {
         match HeyboxApi::new(session.clone())?.restore_login().await {
             Ok(identity) => {
-                tracing::info!(
-                    "已登录：{}（{}）",
-                    identity.nickname,
-                    identity.user_id
-                );
+                tracing::info!("已登录：{}（{}）", identity.nickname, identity.user_id);
                 return Ok((session, identity.nickname));
             }
             Err(Error::Auth) => {
@@ -282,7 +269,10 @@ async fn cmd_mentions() -> Result<()> {
         );
     }
     if found.is_empty() {
-        println!("（原始响应片段：{}）", &response.to_string().chars().take(600).collect::<String>());
+        println!(
+            "（原始响应片段：{}）",
+            response.to_string().chars().take(600).collect::<String>()
+        );
     }
     Ok(())
 }
@@ -297,7 +287,7 @@ async fn cmd_mentions() -> Result<()> {
 /// - `--post <帖子 id>`：把某个帖子当作待评价的对象
 async fn cmd_preview() -> Result<()> {
     let ai = AiClient::new(heybot::ai::AiConfig::from_env()?)?;
-    let policy = policy_with_prompts();
+    let policy = reply::policy_with_prompts();
 
     let args: Vec<String> = std::env::args().collect();
     let text_arg = flag_value(&args, "--text");
@@ -340,10 +330,7 @@ async fn cmd_preview() -> Result<()> {
                     .unwrap_or(0.0)
                     .total_cmp(&a.timestamp.parse::<f64>().unwrap_or(0.0))
             });
-            let Some(mention) = found
-                .into_iter()
-                .find(|item| mentions::is_reply_to_me(item))
-            else {
+            let Some(mention) = found.into_iter().find(mentions::is_reply_to_me) else {
                 println!("没有待回复的 @ 消息。");
                 println!("可以自带内容来预览：");
                 println!("  heybot preview --text \"要评价的评论内容\"");
@@ -392,7 +379,7 @@ async fn cmd_reply() -> Result<()> {
     let api = client().await?;
     let ai = AiClient::new(heybot::ai::AiConfig::from_env()?)?;
     let mut store = reply::DedupStore::open(store::dedup_path())?;
-    let policy = policy_with_prompts();
+    let policy = reply::policy_with_prompts();
 
     // --latest：只回最新一条，用于安全验证。
     if std::env::args().any(|arg| arg == "--latest") {
@@ -406,10 +393,7 @@ async fn cmd_reply() -> Result<()> {
                 .unwrap_or(0.0)
                 .total_cmp(&a.timestamp.parse::<f64>().unwrap_or(0.0))
         });
-        let Some(mention) = mentions
-            .into_iter()
-            .find(|item| mentions::is_reply_to_me(item))
-        else {
+        let Some(mention) = mentions.into_iter().find(mentions::is_reply_to_me) else {
             println!("没有需要回复的消息。");
             return Ok(());
         };
@@ -444,7 +428,7 @@ async fn cmd_watch() -> Result<()> {
     let api = HeyboxApi::new(session)?;
     let ai = AiClient::new(heybot::ai::AiConfig::from_env()?)?;
     let mut store = reply::DedupStore::open(store::dedup_path())?;
-    let policy = policy_with_prompts();
+    let policy = reply::policy_with_prompts();
 
     let mut config = watch::default_config();
     if let Some(seconds) = heybot::config::number::<u64>("HEYBOT_POLL_SECONDS") {
@@ -478,10 +462,8 @@ async fn cmd_watch() -> Result<()> {
     tracing::info!("等待 @ 消息中，Ctrl-C 退出。");
 
     // Ctrl-C 时优雅退出：停止轮询，保存去重记录。
-    let mut sigterm =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut sigint =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         _ = sigterm.recv() => {}

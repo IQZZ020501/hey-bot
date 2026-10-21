@@ -282,18 +282,16 @@ pub async fn run_round(
             let ai = ai.clone();
             let system = policy.prompts.system.clone();
             let prompt = item.prompt.clone();
-            tasks.push(tokio::spawn(async move {
-                ai.complete(&system, &prompt).await
-            }));
+            tasks.push(tokio::spawn(
+                async move { ai.complete(&system, &prompt).await },
+            ));
         }
         for task in tasks {
             match task.await {
                 Ok(Ok(text)) => generated.push(Some(Ok(text))),
                 Ok(Err(error)) => generated.push(Some(Err(error))),
                 Err(error) => {
-                    generated.push(Some(Err(Error::Ai(format!(
-                        "生成任务异常：{error}"
-                    )))))
+                    generated.push(Some(Err(Error::Ai(format!("生成任务异常：{error}")))))
                 }
             }
         }
@@ -364,10 +362,10 @@ pub async fn watch(
     let watermark_path = crate::store::watermark_path();
     let mut watermark = match crate::store::load_watermark(&watermark_path) {
         Some(value) if config.skip_history => {
-            tracing::info!(
-                "沿用上次的水位线（message_id={value}），停机期间到达的消息会补上。"
-            );
-            Watermark { highest_message_id: value }
+            tracing::info!("沿用上次的水位线（message_id={value}），停机期间到达的消息会补上。");
+            Watermark {
+                highest_message_id: value,
+            }
         }
         _ => {
             let watermark = prime_watermark(api, store, config.page_size).await?;
@@ -386,7 +384,8 @@ pub async fn watch(
             Ok(round) => {
                 failures = 0;
                 // 水位线落盘：崩了也不丢进度。
-                if let Err(error) = crate::store::save_watermark(&watermark_path, watermark.value()) {
+                if let Err(error) = crate::store::save_watermark(&watermark_path, watermark.value())
+                {
                     tracing::warn!("保存水位线失败：{error}");
                 }
                 if round.fresh > 0 {
@@ -405,13 +404,13 @@ pub async fn watch(
             }
             Err(Error::Auth) => {
                 tracing::error!("会话失效，请重新执行 heybot login");
-                return Err(Error::Auth.into());
+                return Err(Error::Auth);
             }
             Err(error) => {
                 failures += 1;
                 tracing::error!("本轮失败（连续 {failures} 次）：{error}");
                 if failures >= config.max_consecutive_failures {
-                    return Err(error.into());
+                    return Err(error);
                 }
                 // 失败后退避，避免把服务端打挂。
                 let backoff = Duration::from_secs((failures as u64 * 5).min(60));
@@ -485,7 +484,7 @@ mod tests {
 
     #[test]
     fn select_fresh_dedupes_across_pages() {
-        let mut watermark = Watermark::default();
+        let watermark = Watermark::default();
         let mut seen = HashSet::new();
         let page = vec![mention("101"), mention("100")];
         let first = select_fresh(&page, &watermark, &mut seen);
@@ -497,7 +496,7 @@ mod tests {
 
     #[test]
     fn select_fresh_keeps_going_when_all_new() {
-        let mut watermark = Watermark::default();
+        let watermark = Watermark::default();
         let mut seen = HashSet::new();
         let page = vec![mention("101"), mention("102")];
         let outcome = select_fresh(&page, &watermark, &mut seen);

@@ -88,16 +88,14 @@ fn deep_str(source: &Value, names: &[&str]) -> Option<String> {
         if depth > 8 {
             return None;
         }
-        let Some(object) = source.as_object() else {
-            return None;
-        };
+        let object = source.as_object()?;
         for name in names {
             if let Some(value) = object.get(*name)
                 && !value.is_null()
             {
                 match value {
                     Value::String(text) if !text.trim().is_empty() => {
-                        return Some(text.trim().to_string())
+                        return Some(text.trim().to_string());
                     }
                     Value::Number(number) => return Some(number.to_string()),
                     _ => {}
@@ -218,8 +216,7 @@ pub fn parse_mention(item: &Value) -> Option<Mention> {
     }
 
     // A 方：提及我的那条评论。直接 @ 我时就是它。
-    let comment_a_id = deep_str(item, &["comment_a_id", "comment_id"])
-        .unwrap_or_default();
+    let comment_a_id = deep_str(item, &["comment_a_id", "comment_id"]).unwrap_or_default();
     // B 方：对方在回复我时才有内容。
     let comment_b_id = deep_str(item, &["comment_b_id"]).unwrap_or_default();
     let root_id = deep_str(item, &["root_comment_id", "root_id", "rootid"])
@@ -228,8 +225,7 @@ pub fn parse_mention(item: &Value) -> Option<Mention> {
 
     let message_id = deep_str(item, &["message_id", "id", "msg_id"])
         .unwrap_or_else(|| format!("{link_id}-{root_id}-{comment_a_id}"));
-    let message_type = deep_str(item, &["message_type", "type", "msg_type"])
-        .unwrap_or_default();
+    let message_type = deep_str(item, &["message_type", "type", "msg_type"]).unwrap_or_default();
 
     // 对方的正文优先用 B 方；没有 B 方时用 A 方（直接 @ 我的情形）。
     //
@@ -270,11 +266,10 @@ pub fn parse_mention(item: &Value) -> Option<Mention> {
     let link_title = deep_str(item, &["link_title", "title", "post_title"])
         .map(|value| plain_text(&value))
         .unwrap_or_default();
-    let timestamp = deep_str(item, &["timestamp", "time", "create_time", "created_at"])
-        .unwrap_or_default();
-    let link_url = deep_str(item, &["link_url", "url"]).unwrap_or_else(|| {
-        format!("https://www.xiaoheihe.cn/app/post/{link_id}")
-    });
+    let timestamp =
+        deep_str(item, &["timestamp", "time", "create_time", "created_at"]).unwrap_or_default();
+    let link_url = deep_str(item, &["link_url", "url"])
+        .unwrap_or_else(|| format!("https://www.xiaoheihe.cn/app/post/{link_id}"));
 
     Some(Mention {
         message_id,

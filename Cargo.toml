@@ -2,6 +2,15 @@
 name = "heybot"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "小黑盒社区 @ 自动回复机器人：拉取被 @ 的消息，交给大模型生成评价并回帖"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/IQZZ020501/hey-bot"
+homepage = "https://github.com/IQZZ020501/hey-bot"
+documentation = "https://docs.rs/heybot"
+keywords = ["xiaheihe", "bot", "automation", "chatbot"]
+categories = ["command-line-utilities", "api-bindings"]
 
 [lib]
 name = "heybot"

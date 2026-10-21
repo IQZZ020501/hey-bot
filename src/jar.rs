@@ -105,9 +105,7 @@ impl CookieStore for RecordingJar {
             }
 
             // 同名同域覆盖。
-            guard.retain(|item| {
-                !(item.name == name && item.domain == domain && item.path == path)
-            });
+            guard.retain(|item| !(item.name == name && item.domain == domain && item.path == path));
             guard.push(StoredCookie {
                 name,
                 value,
@@ -127,7 +125,7 @@ impl CookieStore for RecordingJar {
             if !Self::domain_matches(&cookie.domain, host) {
                 continue;
             }
-            if !path.starts_with(&cookie.path.as_str()) {
+            if !path.starts_with(cookie.path.as_str()) {
                 continue;
             }
             if cookie.secure && url.scheme() != "https" {
@@ -159,22 +157,28 @@ mod tests {
     #[test]
     fn records_cookies_from_any_domain() {
         let jar = RecordingJar::default();
-        let headers = vec![
+        let headers = [
             HeaderValue::from_static("user_heybox_id=42; Domain=.xiaoheihe.cn; Path=/"),
             HeaderValue::from_static("pkey=pk; Domain=.xiaoheihe.cn; Path=/"),
         ];
         let mut iter = headers.iter();
-        jar.set_cookies(&mut iter, &url("https://api.xiaoheihe.cn/account/qr_state/"));
+        jar.set_cookies(
+            &mut iter,
+            &url("https://api.xiaoheihe.cn/account/qr_state/"),
+        );
 
         let all = jar.all();
         assert_eq!(all.len(), 2);
-        assert!(all.iter().any(|item| item.name == "user_heybox_id" && item.value == "42"));
+        assert!(
+            all.iter()
+                .any(|item| item.name == "user_heybox_id" && item.value == "42")
+        );
     }
 
     #[test]
     fn parent_domain_cookies_are_sent_to_subdomain() {
         let jar = RecordingJar::default();
-        let headers = vec![HeaderValue::from_static(
+        let headers = [HeaderValue::from_static(
             "session=abc; Domain=.xiaoheihe.cn; Path=/",
         )];
         let mut iter = headers.iter();
@@ -190,8 +194,9 @@ mod tests {
     #[test]
     fn unrelated_domain_cookies_are_not_sent() {
         let jar = RecordingJar::default();
-        let headers =
-            vec![HeaderValue::from_static("other=1; Domain=.example.com; Path=/")];
+        let headers = [HeaderValue::from_static(
+            "other=1; Domain=.example.com; Path=/",
+        )];
         let mut iter = headers.iter();
         jar.set_cookies(&mut iter, &url("https://api.example.com/"));
         assert!(jar.cookies(&url("https://api.xiaoheihe.cn/")).is_none());
@@ -201,7 +206,7 @@ mod tests {
     fn same_name_on_same_domain_is_replaced() {
         let jar = RecordingJar::default();
         for value in ["old", "new"] {
-            let headers = vec![HeaderValue::from_str(&format!(
+            let headers = [HeaderValue::from_str(&format!(
                 "heybox_id={value}; Domain=.xiaoheihe.cn; Path=/"
             ))
             .unwrap()];

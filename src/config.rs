@@ -83,7 +83,10 @@ pub fn number<T: std::str::FromStr>(key: &str) -> Option<T> {
 /// 接受 `1/true/yes/on` 与 `0/false/no/off`。
 pub fn flag(key: &str) -> bool {
     matches!(
-        optional(key).as_deref().map(str::to_ascii_lowercase).as_deref(),
+        optional(key)
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("1" | "true" | "yes" | "on")
     )
 }
