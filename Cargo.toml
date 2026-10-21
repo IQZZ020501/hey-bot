@@ -50,6 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 qrcode = { version = "0.14", features = ["svg"] }
 dotenvy = "0.15"
 dirs = "6"
+async-trait = "0.1.92"
 
 [profile.release]
 strip = true

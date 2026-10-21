@@ -133,6 +133,34 @@ HEYBOT_POLL_SECONDS=5 heybot watch
 
 ## 工作原理
 
+### 架构：Puppet + Bot + Message
+
+借鉴 wechaty 的形态，把「平台特有」和「业务逻辑」分开：
+
+| 层 | 模块 | 职责 |
+|---|---|---|
+| 平台接口 | `src/puppet.rs` | `Puppet` trait：拉消息、判目标、收上下文、发回复 |
+| 平台实现 | `src/provider.rs` | `XiaoheihePuppet`：小黑盒的评论树、id 语义都收在这里 |
+| 事件派发 | `src/bot.rs` | `Bot` / `Message`：注册处理器、收到消息自动调用 |
+| 业务编排 | `src/reply.rs` `src/watch.rs` | 幂等、水位线、限速、失败重试 |
+
+用法是「注册处理器」而不是「调用一堆自由函数」：
+
+```rust
+let mut bot = Bot::new(Arc::new(XiaoheihePuppet::new(api)), dedup);
+bot.on_message(|msg| async move {
+    if msg.is_replied().await {
+        return Ok(ReplyOutcome::Skipped);
+    }
+    let text = ai.complete(&system, msg.prompt()).await?;
+    msg.say(&text).await
+});
+```
+
+`msg.say()` 自带幂等：已回复过的消息直接跳过；发送时网络错误记为「结果未知」并写去重表，避免重发。
+
+因为平台行为收敛在 `Puppet` 后面，测试不需要 mock HTTP server——`tests/bot_flow.rs` 用一个内存里的假平台跑完整链路。
+
 ### 常驻模式
 
 ```bash

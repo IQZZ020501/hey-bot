@@ -9,11 +9,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::ai::AiClient;
-use crate::api::HeyboxApi;
-use crate::context::{self, Context, TargetKind};
+use crate::bot::{Bot, Message};
+use crate::context::{Context, TargetKind};
 use crate::error::{Error, Result};
 use crate::mentions::Mention;
+use crate::puppet::Puppet;
 
 /// 已处理消息的本地记录。
 pub struct DedupStore {
@@ -167,52 +167,29 @@ pub fn build_prompt(
     crate::prompt::render(template, &values)
 }
 
-/// 读取一条 @ 消息的目标评论是否仍然存在。
-///
-/// 避免对着已经被删掉的评论回复。
-pub async fn target_exists(api: &HeyboxApi, mention: &Mention) -> Result<bool> {
-    let (reply_id, root_id) = mention.reply_targets();
-    if reply_id == "-1" {
-        // 顶层评论：目标就是主楼。
-        return Ok(true);
-    }
-    // 用楼层收集统一判断：主楼在 link/tree 里，楼中楼在 sub_comments 里。
-    // 注意 commentid 是数字，不能用 as_str() 比较。
-    let floor = context::collect_floor(api, &mention.link_id, root_id).await?;
-    Ok(floor.iter().any(|item| item.id == reply_id))
-}
-
-/// 处理单条 @ 消息。
+/// 处理单条 @ 消息：准备 → 派发事件。
 ///
 /// 这是「准备 + 发送」的串行组合，供 `heybot reply` 这类一次性命令使用。
-/// 常驻模式走 `prepare` / `post` 两阶段，好把耗时的 AI 生成并发起来。
+/// 常驻模式走 `prepare` + 并发派发，好把耗时的 AI 生成并发起来。
 pub async fn handle_mention(
-    api: &HeyboxApi,
-    ai: &AiClient,
-    store: &mut DedupStore,
+    bot: &Bot,
     policy: &ReplyPolicy,
     mention: &Mention,
 ) -> Result<ReplyOutcome> {
-    if store.contains(&mention.message_id) {
+    if bot.dedup().lock().await.contains(&mention.message_id) {
         return Ok(ReplyOutcome::Skipped);
     }
-    let Some(prepared) = prepare(api, policy, mention).await? else {
+    let Some(prepared) = prepare(bot.puppet().as_ref(), policy, mention).await? else {
         // 目标评论已被删除。
-        store.mark(&mention.message_id)?;
+        bot.dedup().lock().await.mark(&mention.message_id)?;
         return Ok(ReplyOutcome::TargetMissing);
     };
-    let text = match generate(ai, policy, &prepared).await {
-        Ok(text) => text,
-        Err(error) => {
-            // AI 失败**不写去重表**：模型超时、网络抖动都可能是暂时的，
-            // 写进去等于永久放弃这条 @。交给调用方决定是否重试。
-            return Ok(ReplyOutcome::AiFailed(error.to_string()));
-        }
-    };
-    post(api, store, policy, &prepared, &text).await
+    let message = Message::from_prepared(prepared, bot.puppet().clone(), bot.dedup().clone());
+    bot.emit(message).await
 }
 
 /// 一条消息准备好但还没生成回复的状态。
+#[derive(Clone)]
 pub struct Prepared {
     pub mention: Mention,
     pub context: Context,
@@ -223,20 +200,20 @@ pub struct Prepared {
 ///
 /// 返回 `None` 表示目标评论已被删除，不该回复。
 pub async fn prepare(
-    api: &HeyboxApi,
+    puppet: &dyn Puppet,
     policy: &ReplyPolicy,
     mention: &Mention,
 ) -> Result<Option<Prepared>> {
     let (reply_id, _) = mention.reply_targets();
     if policy.verify_target && reply_id != "-1" {
-        match target_exists(api, mention).await? {
+        match puppet.target_exists(mention).await? {
             true => {}
             false => return Ok(None),
         }
     }
 
     // 收集上下文：要知道「评价什么」，否则模型只能反问。
-    let context = context::collect(api, mention).await?;
+    let context = puppet.context(mention).await?;
     let prompt = build_prompt(mention, &context, &policy.prompts);
     Ok(Some(Prepared {
         mention: mention.clone(),
@@ -245,67 +222,16 @@ pub async fn prepare(
     }))
 }
 
-/// 阶段二：调用 AI 生成回复。
-///
-/// 这是整条链路里唯一不受小黑盒接口限速约束的 IO，
-/// 所以常驻模式把它并发做。
-pub async fn generate(ai: &AiClient, policy: &ReplyPolicy, prepared: &Prepared) -> Result<String> {
-    let _ = &prepared.context;
-    ai.complete(&policy.prompts.system, &prepared.prompt).await
-}
-
-/// 阶段三：把回复发出去。
-pub async fn post(
-    api: &HeyboxApi,
-    store: &mut DedupStore,
-    policy: &ReplyPolicy,
-    prepared: &Prepared,
-    text: &str,
-) -> Result<ReplyOutcome> {
-    let mention = &prepared.mention;
-    let (reply_id, root_id) = mention.reply_targets();
-    let _ = policy;
-    match api
-        .create_comment(&mention.link_id, text, reply_id, root_id)
-        .await
-    {
-        Ok(data) => {
-            // 服务端把新评论 id 放在**响应顶层**的 commentid，
-            // result 里只有评论详情。注意它是 JSON 数字。
-            let comment_id = context::numeric_id(data.get("commentid"))
-                .or_else(|| context::numeric_id(data.pointer("/result/commentid")))
-                .or_else(|| {
-                    context::numeric_id(data.pointer("/result/comment/comment/0/commentid"))
-                })
-                .unwrap_or_default();
-            store.mark(&mention.message_id)?;
-            Ok(ReplyOutcome::Replied { comment_id })
-        }
-        Err(Error::Network(message)) => {
-            // 响应丢失：可能已经发出去了。记录为不确定，不重发。
-            store.mark(&mention.message_id)?;
-            Ok(ReplyOutcome::Uncertain(message))
-        }
-        Err(error) => Err(error),
-    }
-}
-
 /// 跑一轮：拉取 @ 消息，处理未回复过的。
-pub async fn run_once(
-    api: &HeyboxApi,
-    ai: &AiClient,
-    store: &mut DedupStore,
-    policy: &ReplyPolicy,
-) -> Result<Vec<(Mention, ReplyOutcome)>> {
-    let response = api.mentions(0, 50).await?;
-    let mentions = crate::mentions::parse_mentions(&response);
+pub async fn run_once(bot: &Bot, policy: &ReplyPolicy) -> Result<Vec<(Mention, ReplyOutcome)>> {
+    let mentions = bot.puppet().mentions(0, 50).await?;
     let mut handled = Vec::new();
 
     for mention in mentions.into_iter().take(policy.max_per_round) {
         if !crate::mentions::is_reply_to_me(&mention) {
             continue;
         }
-        let outcome = handle_mention(api, ai, store, policy, &mention).await?;
+        let outcome = handle_mention(bot, policy, &mention).await?;
         let should_stop = matches!(
             outcome,
             ReplyOutcome::Uncertain(_) | ReplyOutcome::AiFailed(_)
@@ -316,6 +242,7 @@ pub async fn run_once(
         }
     }
 
+    let mut store = bot.dedup().lock().await;
     store.prune(5000);
     store.flush()?;
     Ok(handled)

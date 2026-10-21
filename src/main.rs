@@ -14,13 +14,18 @@ use heybot::reply;
 use heybot::store;
 use heybot::watch;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use tokio::sync::Mutex;
 
 use heybot::ai::AiClient;
 use heybot::api::HeyboxApi;
+use heybot::bot::Bot;
 use heybot::error::Error;
+use heybot::provider::XiaoheihePuppet;
+use heybot::puppet::Puppet;
 use heybot::reply::ReplyOutcome;
 
 fn usage() -> &'static str {
@@ -108,6 +113,32 @@ async fn cmd_probe() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// 注册默认处理器：调 AI 生成评价，然后回复这条消息。
+///
+/// 幂等与「结果未知不重发」由 [`heybot::bot::Message::say`] 保证。
+fn register_auto_reply(bot: &mut Bot, ai: &AiClient, policy: &reply::ReplyPolicy) {
+    let ai = ai.clone();
+    let system = policy.prompts.system.clone();
+    bot.on_message(move |msg| {
+        let ai = ai.clone();
+        let system = system.clone();
+        async move {
+            if msg.is_replied().await {
+                return Ok(ReplyOutcome::Skipped);
+            }
+            let text = match ai.complete(&system, msg.prompt()).await {
+                Ok(text) => text,
+                Err(error) => {
+                    // AI 失败**不写去重表**：模型超时、网络抖动都可能是暂时的，
+                    // 写进去等于永久放弃这条 @。留给下一轮重试。
+                    return Ok(ReplyOutcome::AiFailed(error.to_string()));
+                }
+            };
+            msg.say(&text).await
+        }
+    });
 }
 
 /// 构造带会话的 API 客户端。
@@ -304,7 +335,7 @@ async fn cmd_preview() -> Result<()> {
         }
     } else {
         // 需要读接口的场景才建客户端。
-        let api = client().await?;
+        let puppet = XiaoheihePuppet::new(client().await?);
         if let Some(link_id) = post_arg {
             let mention = mentions::Mention {
                 message_id: "preview".into(),
@@ -320,10 +351,9 @@ async fn cmd_preview() -> Result<()> {
                 link_url: String::new(),
                 comment_a_id: String::new(),
             };
-            heybot::context::collect(&api, &mention).await?
+            puppet.context(&mention).await?
         } else {
-            let response = api.mentions(0, 20).await?;
-            let mut found = mentions::parse_mentions(&response);
+            let mut found = puppet.mentions(0, 20).await?;
             found.sort_by(|a, b| {
                 b.timestamp
                     .parse::<f64>()
@@ -337,7 +367,7 @@ async fn cmd_preview() -> Result<()> {
                 println!("  heybot preview --post <帖子 id>");
                 return Ok(());
             };
-            heybot::context::collect(&api, &mention).await?
+            puppet.context(&mention).await?
         }
     };
 
@@ -376,17 +406,17 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 async fn cmd_reply() -> Result<()> {
-    let api = client().await?;
+    let puppet = XiaoheihePuppet::new(client().await?);
     let ai = AiClient::new(heybot::ai::AiConfig::from_env()?)?;
-    let mut store = reply::DedupStore::open(store::dedup_path())?;
+    let store = Arc::new(Mutex::new(reply::DedupStore::open(store::dedup_path())?));
     let policy = reply::policy_with_prompts();
+    let mut bot = Bot::new(Arc::new(puppet), store.clone());
+    register_auto_reply(&mut bot, &ai, &policy);
 
     // --latest：只回最新一条，用于安全验证。
     if std::env::args().any(|arg| arg == "--latest") {
-        let response = api.mentions(0, 20).await?;
-        let mentions = mentions::parse_mentions(&response);
         // 显式按时间倒序，不依赖接口返回顺序。
-        let mut mentions = mentions;
+        let mut mentions = bot.puppet().mentions(0, 20).await?;
         mentions.sort_by(|a, b| {
             b.timestamp
                 .parse::<f64>()
@@ -403,7 +433,7 @@ async fn cmd_reply() -> Result<()> {
         );
         let (reply_id, root_id) = mention.reply_targets();
         println!("  reply_id={reply_id} root_id={root_id}");
-        match reply::handle_mention(&api, &ai, &mut store, &policy, &mention).await? {
+        match reply::handle_mention(&bot, &policy, &mention).await? {
             reply::ReplyOutcome::Replied { comment_id } => {
                 println!("已回复，comment_id={comment_id}");
             }
@@ -417,7 +447,7 @@ async fn cmd_reply() -> Result<()> {
         return Ok(());
     }
 
-    let handled = reply::run_once(&api, &ai, &mut store, &policy).await?;
+    let handled = reply::run_once(&bot, &policy).await?;
     report(&handled);
     Ok(())
 }
@@ -425,10 +455,12 @@ async fn cmd_reply() -> Result<()> {
 async fn cmd_watch() -> Result<()> {
     // 没登录就扫码，登录了就直接常驻。
     let (session, nickname) = ensure_session().await?;
-    let api = HeyboxApi::new(session)?;
+    let puppet = XiaoheihePuppet::new(HeyboxApi::new(session)?);
     let ai = AiClient::new(heybot::ai::AiConfig::from_env()?)?;
-    let mut store = reply::DedupStore::open(store::dedup_path())?;
+    let store = Arc::new(Mutex::new(reply::DedupStore::open(store::dedup_path())?));
     let policy = reply::policy_with_prompts();
+    let mut bot = Bot::new(Arc::new(puppet), store.clone());
+    register_auto_reply(&mut bot, &ai, &policy);
 
     let mut config = watch::default_config();
     if let Some(seconds) = heybot::config::number::<u64>("HEYBOT_POLL_SECONDS") {
@@ -468,12 +500,12 @@ async fn cmd_watch() -> Result<()> {
         _ = tokio::signal::ctrl_c() => {}
         _ = sigterm.recv() => {}
         _ = sigint.recv() => {}
-        result = watch::watch(&api, &ai, &mut store, &policy, &config) => {
+        result = watch::watch(&bot, &store, &policy, &config) => {
             result?;
         }
     }
 
-    store.flush()?;
+    store.lock().await.flush()?;
     tracing::info!("已退出，去重记录已保存到 {}", store::dedup_path().display());
     Ok(())
 }
