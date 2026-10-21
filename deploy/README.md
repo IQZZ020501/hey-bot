@@ -11,10 +11,10 @@
 
 ---
 
-## 一、拿到二进制
+## 一、下载完整包
 
 **在 GitHub 上构建**——仓库自带 CI，推送后自动产出三个 Linux 目标，
-服务器上**不需要装 Rust**，本地也不用交叉编译：
+每个目标打成一个 `.tar.gz` 完整包。服务器上**不需要装 Rust**，本地也不用交叉编译：
 
 | 目标 | 说明 |
 |---|---|
@@ -24,14 +24,49 @@
 
 ### 下载
 
-打 tag（`v0.1.0`）会自动发一个
-[Release](https://github.com/IQZZ020501/hey-bot/releases)，里面是三个二进制、
-`SHA256SUMS` 和 `deploy/` 部署脚本：
+打 tag（`v0.1.1`）会自动发一个
+[Release](https://github.com/IQZZ020501/hey-bot/releases)，里面是三个 `.tar.gz` 完整包和
+`SHA256SUMS`。每个包都包含：
+
+```text
+heybot-v0.1.1-x86_64-unknown-linux-musl/
+├── heybot                 # 可执行程序
+├── .env.example           # 配置模板
+├── README.md
+├── LICENSE
+└── deploy/
+    ├── README.md          # 本部署说明
+    ├── install.sh
+    └── heybot.service
+```
+
+下载适合服务器架构的包，再传到服务器：
 
 ```bash
-gh release download v0.1.0 -p '*x86_64-unknown-linux-musl*' -D /tmp
-scp /tmp/heybot-v0.1.0-x86_64-unknown-linux-musl server:/tmp/heybot
+gh release download v0.1.1 -p '*x86_64-unknown-linux-musl.tar.gz' -p SHA256SUMS -D /tmp
+scp /tmp/heybot-v0.1.1-x86_64-unknown-linux-musl.tar.gz /tmp/SHA256SUMS server:/tmp/
 ```
+
+在服务器上校验并解压：
+
+```bash
+cd /tmp
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf heybot-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+cd heybot-v0.1.1-x86_64-unknown-linux-musl
+```
+
+先配置，再直接启动：
+
+```bash
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env，填上 HEYBOT_AI_API_KEY 和 HEYBOT_AI_MODEL
+./heybot watch
+```
+
+程序会提示扫码登录并进入常驻监听。默认 prompt 已内置，无需额外模板文件。
+需要后台服务时，按下一节安装 systemd；执行安装前先用 `Ctrl-C` 停止直接运行的程序。
 
 不想打 tag 的话，每次推送的构建产物也挂在 Actions 页面：
 
@@ -55,7 +90,7 @@ gh workflow run ci.yml --repo IQZZ020501/hey-bot
 
 ## 二、安装
 
-把二进制传到服务器（`scp` 就行），然后：
+在解压后的目录中，完成上面的 `.env` 配置后执行：
 
 ```bash
 sudo bash deploy/install.sh ./heybot

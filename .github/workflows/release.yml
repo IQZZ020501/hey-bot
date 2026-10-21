@@ -48,16 +48,20 @@ jobs:
       - name: 构建
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: 重命名
+      - name: 打包发布文件
+        env:
+          PACKAGE: heybot-${{ github.ref_name }}-${{ matrix.target }}
         run: |
-          cp target/${{ matrix.target }}/release/heybot \
-             heybot-${{ github.ref_name }}-${{ matrix.target }}
-          chmod +x heybot-${{ github.ref_name }}-${{ matrix.target }}
+          mkdir -p "dist/$PACKAGE/deploy"
+          install -m 0755 target/${{ matrix.target }}/release/heybot "dist/$PACKAGE/heybot"
+          cp .env.example README.md LICENSE "dist/$PACKAGE/"
+          cp deploy/README.md deploy/install.sh deploy/heybot.service "dist/$PACKAGE/deploy/"
+          tar -czf "dist/$PACKAGE.tar.gz" -C dist "$PACKAGE"
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
-          path: heybot-${{ github.ref_name }}-${{ matrix.target }}
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   publish:
@@ -65,27 +69,19 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      # deploy/ 目录要一起发出去，得先把代码拉下来。
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
+          pattern: release-*
           path: dist
           merge-multiple: true
 
-      - name: 附上部署脚本
-        run: |
-          mkdir -p dist/deploy
-          cp -r deploy/* dist/deploy/
-
       - name: 生成校验和
         working-directory: dist
-        run: sha256sum heybot-* > SHA256SUMS
+        run: sha256sum heybot-*.tar.gz > SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/heybot-*
+            dist/*.tar.gz
             dist/SHA256SUMS
-            dist/deploy/*
           generate_release_notes: true

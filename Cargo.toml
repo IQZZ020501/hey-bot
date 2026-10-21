@@ -1,6 +1,6 @@
 [package]
 name = "heybot"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "小黑盒社区 @ 自动回复机器人：拉取被 @ 的消息，交给大模型生成评价并回帖"

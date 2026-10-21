@@ -8,6 +8,14 @@
 
 ## 快速开始
 
+从 [Releases](https://github.com/IQZZ020501/hey-bot/releases) 下载对应架构的 Linux
+`.tar.gz` 完整包，解压后进入目录。包内包含程序、配置模板和部署脚本，运行时不需要安装 Rust：
+
+```bash
+tar -xzf heybot-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+cd heybot-v0.1.1-x86_64-unknown-linux-musl
+```
+
 ### 1. 配置
 
 ```bash
@@ -19,8 +27,7 @@ chmod 600 .env
 ### 2. 启动
 
 ```bash
-cargo build --release
-./target/release/heybot watch
+./heybot watch
 ```
 
 **就这一条命令。** 它会自己判断：
@@ -41,7 +48,7 @@ cargo build --release
 无参数运行等价于 `heybot watch`：
 
 ```bash
-./target/release/heybot        # 等同于 watch
+./heybot        # 等同于 watch
 ```
 
 常驻期间的行为：
@@ -54,24 +61,33 @@ cargo build --release
 ### 3. 其它命令
 
 ```bash
-./target/release/heybot preview            # 渲染 prompt 并预览 AI 回复（不发送）
-./target/release/heybot mentions           # 看抓到了什么
-./target/release/heybot whoami             # 当前登录的是哪个号
-./target/release/heybot reply              # 手动回一条
-./target/release/heybot reply --latest     # 只回最新一条
-./target/release/heybot login              # 强制重新扫码登录
-./target/release/heybot probe              # 签名连通性自检（不需要登录）
+./heybot preview            # 渲染 prompt 并预览 AI 回复（不发送）
+./heybot mentions           # 看抓到了什么
+./heybot whoami             # 当前登录的是哪个号
+./heybot reply              # 手动回一条
+./heybot reply --latest     # 只回最新一条
+./heybot login              # 强制重新扫码登录
+./heybot probe              # 签名连通性自检（不需要登录）
 ```
 
 `preview` 有三种输入来源，方便本地调 prompt：
 
 ```bash
-./target/release/heybot preview                            # 用最新一条真实的 @ 消息
-./target/release/heybot preview --text "要评价的评论内容"    # 自带文本
-./target/release/heybot preview --post 192794050           # 用某个帖子的正文
+./heybot preview                            # 用最新一条真实的 @ 消息
+./heybot preview --text "要评价的评论内容"    # 自带文本
+./heybot preview --post 192794050           # 用某个帖子的正文
 ```
 
 `--text` 模式不联网、不需要登录态，可以随便试措辞。
+
+### 从源码构建
+
+也可以在源码目录构建并启动：
+
+```bash
+cargo build --release
+./target/release/heybot watch
+```
 
 ## 配置
 
@@ -171,14 +187,14 @@ bot.on_message(|msg| async move {
 ### 常驻模式
 
 ```bash
-./target/release/heybot watch
+./heybot watch
 ```
 
 ## 部署到 Linux
 
 完整步骤见 [`deploy/README.md`](deploy/README.md)，这里只列骨架。
 
-**构建**——推给 GitHub Actions 编，产物在 Releases 里下载：
+**构建**——推给 GitHub Actions 编，Releases 为每个目标提供一个 `.tar.gz` 完整包：
 
 | 目标 | 说明 |
 |---|---|
@@ -187,15 +203,20 @@ bot.on_message(|msg| async move {
 | `x86_64-unknown-linux-gnu` | 动态链接，依赖 glibc 2.35+ |
 
 ```bash
-gh release download v0.1.0 -p '*x86_64-unknown-linux-musl*' -D /tmp
-scp /tmp/heybot-v0.1.0-x86_64-unknown-linux-musl server:/tmp/heybot
+gh release download v0.1.1 -p '*x86_64-unknown-linux-musl.tar.gz' -D /tmp
+scp /tmp/heybot-v0.1.1-x86_64-unknown-linux-musl.tar.gz server:/tmp/
 ```
 
 用 `rustls` 而非 `openssl`，服务器上不需要装 `libssl-dev`。
 
-**安装**——`deploy/install.sh` 建系统用户、装到 `/opt/heybot`、配好 systemd：
+**安装**——在服务器解压并填写配置后，`deploy/install.sh` 建系统用户、装到 `/opt/heybot`、配好 systemd：
 
 ```bash
+tar -xzf /tmp/heybot-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+cd heybot-v0.1.1-x86_64-unknown-linux-musl
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env，填上 HEYBOT_AI_API_KEY 和 HEYBOT_AI_MODEL
 sudo bash deploy/install.sh ./heybot
 ```
 

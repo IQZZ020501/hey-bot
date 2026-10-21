@@ -68,9 +68,19 @@ jobs:
       - name: 构建
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: 打包发布文件
+        env:
+          PACKAGE: heybot-${{ matrix.target }}
+        run: |
+          mkdir -p "dist/$PACKAGE/deploy"
+          install -m 0755 target/${{ matrix.target }}/release/heybot "dist/$PACKAGE/heybot"
+          cp .env.example README.md LICENSE "dist/$PACKAGE/"
+          cp deploy/README.md deploy/install.sh deploy/heybot.service "dist/$PACKAGE/deploy/"
+          tar -czf "dist/$PACKAGE.tar.gz" -C dist "$PACKAGE"
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: heybot-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/heybot
+          path: dist/*.tar.gz
           if-no-files-found: error
