@@ -228,7 +228,7 @@ pub async fn run_once(bot: &Bot, policy: &ReplyPolicy) -> Result<Vec<(Mention, R
     let mut handled = Vec::new();
 
     for mention in mentions.into_iter().take(policy.max_per_round) {
-        if !crate::mentions::is_reply_to_me(&mention) {
+        if !crate::mentions::is_at_mention(&mention) {
             continue;
         }
         let outcome = handle_mention(bot, policy, &mention).await?;

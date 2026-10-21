@@ -111,3 +111,20 @@ async fn 处理器返回错误时事件派发中断() {
     assert!(outcome.is_err(), "处理器报错应向上传递");
     assert!(puppet.sent().await.is_empty(), "没走到 say 就不该有记录");
 }
+
+#[tokio::test]
+async fn 只回复_at_的消息_楼中楼回复被过滤掉() {
+    // type=1 是「回复了我（楼中楼）」，没有 @，不该被回复。
+    let mut reply_only = mention("m2");
+    reply_only.message_type = "1".into();
+    let puppet = Arc::new(FakePuppet::with(vec![reply_only]));
+    let store = Arc::new(Mutex::new(temp_store("filter")));
+    let bot = bot_with(puppet.clone(), store);
+
+    let handled = heybot::reply::run_once(&bot, &heybot::reply::default_policy())
+        .await
+        .expect("跑一轮");
+
+    assert!(handled.is_empty(), "非 @ 的消息不该进入处理流程");
+    assert!(puppet.sent().await.is_empty(), "不该发出任何回复");
+}

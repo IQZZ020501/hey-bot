@@ -229,7 +229,7 @@ pub async fn run_round(
         .take(config.max_per_round)
         .filter(|mention| {
             // 只处理需要回复的类型。
-            crate::mentions::is_reply_to_me(mention)
+            crate::mentions::is_at_mention(mention)
                 // 只回指定用户。
                 && (config.only_user.is_empty() || mention.from_user == config.only_user)
         })

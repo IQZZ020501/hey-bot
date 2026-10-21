@@ -307,12 +307,16 @@ impl HeyboxApi {
     /// 读取 @ 我的消息。
     ///
     /// 官方网页端的标签映射（实测自官网 JS）：
-    /// - 所有评论 → `list_type=0`
+    /// - 所有评论 → `list_type=0`（含「回复了你」和「评论了你的帖子」）
     /// - 点赞 → `list_type=1`
     /// - 关注 → `message_type=4`
     /// - **@我的 → `message_type=16`**
     ///
     /// 注意「@我的」不是 `list_type`，用错参数会拿到「所有评论」或空列表。
+    ///
+    /// 这个列表里的条目 `message_type` 都是 `17`（直接 @）。
+    /// 「回复了你」在 `list_type=0` 列表里，本项目不处理——
+    /// 它的 A/B 归属和 @ 完全不同，见 [`crate::mentions::is_at_mention`]。
     pub async fn mentions(&self, offset: i64, limit: i64) -> Result<Value> {
         self.get(
             "/bbs/app/user/message",

@@ -75,11 +75,6 @@ impl Mention {
         }
         (self.reply_id.as_str(), self.root_id.as_str())
     }
-
-    /// 是否是楼中楼回复。
-    pub fn is_sub_reply(&self) -> bool {
-        !self.reply_id.is_empty()
-    }
 }
 
 /// 深度查找第一个非空的字符串字段。
@@ -287,14 +282,19 @@ pub fn parse_mention(item: &Value) -> Option<Mention> {
     })
 }
 
-/// 判断消息是否属于"对我发起的互动"。
+/// 判断消息是否是一条**@ 我**的评论。
 ///
-/// 官方语义：
-/// - `1` 回复了你（楼中楼）
-/// - `2` 评论了你的帖子（顶层评论）
-/// - `17` 直接 @ 了你（「@我的」列表返回的类型）
-pub fn is_reply_to_me(mention: &Mention) -> bool {
-    matches!(mention.message_type.as_str(), "1" | "2" | "17")
+/// 官方消息类型（`message_type=16`「@我的」列表实测）：
+/// - `17`：直接 @ 我 —— **只有这一种要处理**
+/// - `1`：回复了我（楼中楼，没有 @）
+/// - `2`：评论了我的帖子（顶层评论）
+/// - `7`：点赞类
+///
+/// 后三种虽然也算「针对我的互动」，但一律过滤掉：
+/// 点赞没什么可回的；楼中楼回复与顶层评论的 A/B 归属和 @ 完全不同
+/// （A 方是对方、B 方是我），按 @ 的语义处理会评价错对象。
+pub fn is_at_mention(mention: &Mention) -> bool {
+    mention.message_type == "17"
 }
 
 #[cfg(test)]
@@ -393,29 +393,31 @@ mod tests {
     }
 
     #[test]
-    fn only_reply_and_comment_types_are_replies() {
-        let reply = Mention {
+    fn 只处理_at_类型的消息() {
+        let at = Mention {
             message_id: "m1".into(),
-            message_type: "1".into(),
+            message_type: "17".into(),
             link_id: "1".into(),
             link_title: String::new(),
             root_id: "9".into(),
-            reply_id: "10".into(),
-            quote: String::new(),
+            reply_id: String::new(),
+            quote: "@heybot 锐评一下".into(),
             from_user: String::new(),
             from_user_id: String::new(),
             timestamp: String::new(),
             link_url: String::new(),
             comment_a_id: String::new(),
         };
-        assert!(is_reply_to_me(&reply));
-        assert!(reply.is_sub_reply());
+        assert!(is_at_mention(&at));
 
-        let award = Mention {
-            message_type: "7".into(),
-            ..reply.clone()
-        };
-        assert!(!is_reply_to_me(&award), "点赞类不是需要回复的互动");
+        // 楼中楼回复、顶层评论、点赞都不是 @，一律过滤。
+        for message_type in ["1", "2", "7", "4", ""] {
+            let other = Mention {
+                message_type: message_type.into(),
+                ..at.clone()
+            };
+            assert!(!is_at_mention(&other), "type={message_type} 不该被处理");
+        }
     }
 
     #[test]
@@ -453,7 +455,7 @@ mod tests {
         assert_eq!(mention.from_user, "玩家AF1008611");
         // 直接 @ 我时 B 方为空，回复目标就是 A 方那条。
         assert_eq!(mention.reply_targets(), ("980593543", "980593543"));
-        assert!(is_reply_to_me(mention));
+        assert!(is_at_mention(mention));
     }
 
     #[test]

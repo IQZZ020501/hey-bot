@@ -360,7 +360,7 @@ async fn cmd_preview() -> Result<()> {
                     .unwrap_or(0.0)
                     .total_cmp(&a.timestamp.parse::<f64>().unwrap_or(0.0))
             });
-            let Some(mention) = found.into_iter().find(mentions::is_reply_to_me) else {
+            let Some(mention) = found.into_iter().find(mentions::is_at_mention) else {
                 println!("没有待回复的 @ 消息。");
                 println!("可以自带内容来预览：");
                 println!("  heybot preview --text \"要评价的评论内容\"");
@@ -423,7 +423,7 @@ async fn cmd_reply() -> Result<()> {
                 .unwrap_or(0.0)
                 .total_cmp(&a.timestamp.parse::<f64>().unwrap_or(0.0))
         });
-        let Some(mention) = mentions.into_iter().find(mentions::is_reply_to_me) else {
+        let Some(mention) = mentions.into_iter().find(mentions::is_at_mention) else {
             println!("没有需要回复的消息。");
             return Ok(());
         };
