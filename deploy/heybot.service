@@ -1,0 +1,37 @@
+[Unit]
+Description=heybot - 小黑盒 @ 自动回复机器人
+Documentation=https://github.com/IQZZ020501/hey-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=heybot
+Group=heybot
+WorkingDirectory=/opt/heybot
+
+# 所有状态文件（session.json / replied.txt / watermark.txt）都放在这里
+Environment=HEYBOT_HOME=/opt/heybot
+Environment=RUST_LOG=heybot=info
+
+ExecStart=/opt/heybot/heybot watch
+
+# 常驻服务：进程退出就拉起。会话失效时它会反复尝试扫码，
+# 恢复办法见 README「部署」一节。
+Restart=always
+RestartSec=30
+
+# ── 安全加固 ────────────────────────────────────────────
+# 除 /opt/heybot 外整个文件系统只读；状态文件只能写在那里。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/heybot
+
+[Install]
+WantedBy=multi-user.target

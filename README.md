@@ -4,6 +4,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-000000?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/IQZZ020501/hey-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/IQZZ020501/hey-bot/actions/workflows/ci.yml)
 
 ## 快速开始
 
@@ -166,6 +167,44 @@ bot.on_message(|msg| async move {
 ```bash
 ./target/release/heybot watch
 ```
+
+## 部署到 Linux
+
+完整步骤见 [`deploy/README.md`](deploy/README.md)，这里只列骨架。
+
+**构建**——本地交叉编译成静态二进制，扔到任何 x86_64 Linux 都能跑：
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+# target/x86_64-unknown-linux-musl/release/heybot
+```
+
+用 `rustls` 而非 `openssl`，服务器上不需要装 `libssl-dev`。
+
+**安装**——`deploy/install.sh` 建系统用户、装到 `/opt/heybot`、配好 systemd：
+
+```bash
+sudo bash deploy/install.sh ./heybot
+```
+
+**登录**——这一步要人扫码，得手动来一次：
+
+```bash
+sudo -u heybot -H /opt/heybot/heybot login
+```
+
+二维码直接画在终端里，扫完会话落到 `/opt/heybot/session.json`。
+
+**运维**：
+
+```bash
+systemctl status heybot
+journalctl -u heybot -f
+```
+
+只需要出网（`api.xiaoheihe.cn` + AI 接口），不需要入站端口。
+小黑盒和常见 AI 接口都是境内服务，**服务器建议放国内**。
 
 ## 参考与致谢
 

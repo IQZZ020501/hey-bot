@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: 打 tag 发版
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: 构建
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: 重命名
+        run: |
+          cp target/${{ matrix.target }}/release/heybot \
+             heybot-${{ github.ref_name }}-${{ matrix.target }}
+          chmod +x heybot-${{ github.ref_name }}-${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: heybot-${{ github.ref_name }}-${{ matrix.target }}
+          if-no-files-found: error
+
+  publish:
+    name: 创建 Release
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 附上部署脚本
+        run: |
+          mkdir -p dist/deploy
+          cp -r deploy/* dist/deploy/
+
+      - name: 生成校验和
+        working-directory: dist
+        run: sha256sum heybot-* > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/heybot-*
+            dist/SHA256SUMS
+            dist/deploy/*
+          generate_release_notes: true
