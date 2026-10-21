@@ -42,7 +42,9 @@ pub struct WatchConfig {
     pub max_consecutive_failures: u32,
     /// 单轮最多处理多少条新消息（背压，防止一轮跑太久）。
     pub max_per_round: usize,
-    /// 同时进行的 AI 生成数。发评论始终串行。
+    /// 同时进行的 AI 生成数。
+    ///
+    /// 接口调用由客户端内部的节流器串行化（600ms 间隔），并发不会打爆。
     pub concurrency: usize,
     /// 「目标评论查不到」重试多少次后才认定它真被删了。
     ///
