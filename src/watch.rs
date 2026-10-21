@@ -18,11 +18,15 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use crate::ai::AiClient;
-use crate::api::HeyboxApi;
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+
+use crate::bot::{Bot, Message};
 use crate::error::{Error, Result};
 use crate::mentions::Mention;
-use crate::reply::{self, DedupStore, ReplyOutcome, ReplyPolicy};
+use crate::puppet::Puppet;
+use crate::reply::{self, DedupStore, Prepared, ReplyOutcome, ReplyPolicy};
 
 /// 监听配置。
 pub struct WatchConfig {
@@ -38,7 +42,9 @@ pub struct WatchConfig {
     pub max_consecutive_failures: u32,
     /// 单轮最多处理多少条新消息（背压，防止一轮跑太久）。
     pub max_per_round: usize,
-    /// 同时进行的 AI 生成数。发评论始终串行。
+    /// 同时进行的 AI 生成数。
+    ///
+    /// 接口调用由客户端内部的节流器串行化（600ms 间隔），并发不会打爆。
     pub concurrency: usize,
     /// 「目标评论查不到」重试多少次后才认定它真被删了。
     ///
@@ -160,7 +166,7 @@ pub fn select_fresh(
 /// 递增 `offset` 一直拉到：没有更多消息，或追上了水位线。
 /// 否则一次来超过一页的 @ 时，最老的那批永远拉不到。
 async fn fetch_new_mentions(
-    api: &HeyboxApi,
+    puppet: &dyn Puppet,
     watermark: &Watermark,
     config: &WatchConfig,
 ) -> Result<Vec<Mention>> {
@@ -169,8 +175,7 @@ async fn fetch_new_mentions(
     let mut offset = 0i64;
 
     loop {
-        let response = api.mentions(offset, config.page_size).await?;
-        let page = crate::mentions::parse_mentions(&response);
+        let page = puppet.mentions(offset, config.page_size).await?;
         if page.is_empty() {
             break;
         }
@@ -197,18 +202,20 @@ async fn fetch_new_mentions(
 
 /// 跑一轮。
 ///
-/// 三阶段：
+/// 三个阶段：
 /// 1. **准备**（串行）：确认目标存在、收集上下文、渲染 prompt。走小黑盒接口，受限速保护。
-/// 2. **生成**（并发）：调用 AI。这是唯一不受接口限速约束的 IO，并发能显著提速。
-/// 3. **发送**（串行）：发出回复。保持串行，避免同时打接口触发风控。
+///    这一步保持串行，因为「目标评论暂时查不到」要按顺序停下来重试。
+/// 2. **派发事件**（并发）：把准备好的消息交给处理器，处理器里做 AI 生成与发送。
+///    AI 是唯一不受接口限速约束的 IO，并发能显著提速；接口调用由客户端内部的
+///    节流器串行化，并发不会打爆。
+/// 3. **结算**（按消息顺序）：从旧到新推进水位线。
 ///
 /// 失败语义：只有「确实处理完」的消息才推进水位线。
-/// AI 失败或读取异常时水位线停在原地，下一轮重试；只有「结果未知」
+/// AI 失败或读取异常时水位线停在它前面，下一轮重试；只有「结果未知」
 /// （请求可能已送达）才写去重表防止重复发。
 pub async fn run_round(
-    api: &HeyboxApi,
-    ai: &AiClient,
-    store: &mut DedupStore,
+    bot: &Bot,
+    store: &Arc<Mutex<DedupStore>>,
     policy: &ReplyPolicy,
     watermark: &mut Watermark,
     missing: &mut MissingTracker,
@@ -216,7 +223,7 @@ pub async fn run_round(
 ) -> Result<Round> {
     let mut round = Round::default();
 
-    let pending = fetch_new_mentions(api, watermark, config).await?;
+    let pending = fetch_new_mentions(bot.puppet().as_ref(), watermark, config).await?;
     let candidates: Vec<Mention> = pending
         .into_iter()
         .take(config.max_per_round)
@@ -235,7 +242,7 @@ pub async fn run_round(
     // 阶段一：准备（串行）。
     let mut prepared = Vec::new();
     for mention in candidates {
-        match reply::prepare(api, policy, &mention).await {
+        match reply::prepare(bot.puppet().as_ref(), policy, &mention).await {
             Ok(Some(item)) => {
                 missing.clear(&mention.message_id);
                 prepared.push(item);
@@ -249,7 +256,7 @@ pub async fn run_round(
                         "目标评论确认不存在（重试 {attempts} 次），跳过消息 {}",
                         mention.message_id
                     );
-                    store.mark(&mention.message_id)?;
+                    store.lock().await.mark(&mention.message_id)?;
                     watermark.observe(&mention);
                 } else {
                     tracing::info!(
@@ -269,81 +276,88 @@ pub async fn run_round(
         }
     }
 
-    // 阶段二：AI 生成（并发）。
+    // 阶段二：派发事件（并发）。
+    //
+    // handler 内部做「AI 生成 + 发送」两件事。AI 不受接口限速约束，可以并发；
+    // 小黑盒接口调用由客户端内部的节流器串行化（600ms 间隔），并发不会打爆。
     let concurrency = config.concurrency.max(1);
-    let mut generated: Vec<Option<Result<String>>> = Vec::with_capacity(prepared.len());
+    let mut outcomes: Vec<Result<ReplyOutcome>> = Vec::with_capacity(prepared.len());
     let mut next = 0usize;
     while next < prepared.len() {
-        let window = prepared[next..].iter().take(concurrency);
-        let batch: Vec<_> = window.collect();
+        let batch: Vec<Prepared> = prepared[next..].iter().take(concurrency).cloned().collect();
         next += batch.len();
         let mut tasks = Vec::new();
         for item in batch {
-            let ai = ai.clone();
-            let system = policy.prompts.system.clone();
-            let prompt = item.prompt.clone();
-            tasks.push(tokio::spawn(
-                async move { ai.complete(&system, &prompt).await },
-            ));
+            let bot = bot.clone();
+            let message = Message::from_prepared(item, bot.puppet().clone(), bot.dedup().clone());
+            tasks.push(tokio::spawn(async move { bot.emit(message).await }));
         }
         for task in tasks {
             match task.await {
-                Ok(Ok(text)) => generated.push(Some(Ok(text))),
-                Ok(Err(error)) => generated.push(Some(Err(error))),
-                Err(error) => {
-                    generated.push(Some(Err(Error::Ai(format!("生成任务异常：{error}")))))
-                }
+                Ok(result) => outcomes.push(result),
+                Err(error) => outcomes.push(Err(Error::Ai(format!("处理任务异常：{error}")))),
             }
         }
     }
 
-    // 阶段三：发送（串行）。
-    for (item, result) in prepared.iter().zip(generated) {
-        let Some(result) = result else {
-            continue;
-        };
-        match result {
-            Ok(text) => {
-                match reply::post(api, store, policy, item, &text).await? {
-                    ReplyOutcome::Replied { .. } => round.replied += 1,
-                    ReplyOutcome::Uncertain(message) => {
-                        // 结果未知：已写去重表，不重发。水位线推进。
-                        round.failed += 1;
-                        tracing::warn!("结果未知，未重发：{message}");
-                    }
-                    other => {
-                        tracing::debug!("未回复：{other:?}");
-                    }
-                }
+    // 阶段三：结算（按消息顺序）。
+    //
+    // 水位线只推进到「连续成功」的边界：遇到失败就停下，
+    // 失败的消息留在水位线之外，下一轮重试。
+    for (item, outcome) in prepared.iter().zip(outcomes) {
+        match outcome {
+            Ok(ReplyOutcome::Replied { .. }) => {
+                round.replied += 1;
                 watermark.observe(&item.mention);
             }
-            Err(error) => {
+            Ok(ReplyOutcome::Uncertain(message)) => {
+                // 结果未知：已写去重表，不重发。水位线推进。
+                round.failed += 1;
+                tracing::warn!("结果未知，未重发：{message}");
+                watermark.observe(&item.mention);
+            }
+            Ok(ReplyOutcome::Skipped) => {
+                watermark.observe(&item.mention);
+            }
+            Ok(ReplyOutcome::TargetMissing) => {
+                // 目标评论已被删除（阶段一已确认存在，这里是兜底）。
+                tracing::debug!("目标评论已删除，跳过。");
+            }
+            Ok(ReplyOutcome::AiFailed(message)) => {
                 // AI 失败：不写去重表、不推进水位线，下一轮重试。
                 round.failed += 1;
-                tracing::warn!("AI 生成失败，稍后重试：{error}");
+                tracing::warn!("AI 生成失败，稍后重试：{message}");
+                break;
+            }
+            Err(error) => {
+                // 发送失败：同样不推进水位线。
+                round.failed += 1;
+                tracing::warn!("发送失败，稍后重试：{error}");
                 break;
             }
         }
     }
 
-    store.prune(20_000);
-    store.flush()?;
+    {
+        let mut store = store.lock().await;
+        store.prune(20_000);
+        store.flush()?;
+    }
     Ok(round)
 }
 
 /// 建立初始水位线：把当前能看到的消息都标记为已见。
 pub async fn prime_watermark(
-    api: &HeyboxApi,
-    store: &mut DedupStore,
+    puppet: &dyn Puppet,
+    store: &Arc<Mutex<DedupStore>>,
     page_size: i64,
 ) -> Result<Watermark> {
     let mut watermark = Watermark::default();
-    let response = api.mentions(0, page_size).await?;
-    for mention in crate::mentions::parse_mentions(&response) {
+    for mention in puppet.mentions(0, page_size).await? {
         watermark.observe(&mention);
-        store.mark(&mention.message_id)?;
+        store.lock().await.mark(&mention.message_id)?;
     }
-    store.flush()?;
+    store.lock().await.flush()?;
     Ok(watermark)
 }
 
@@ -351,9 +365,8 @@ pub async fn prime_watermark(
 ///
 /// 返回 `Ok(())` 表示正常退出（收到退出信号）。
 pub async fn watch(
-    api: &HeyboxApi,
-    ai: &AiClient,
-    store: &mut DedupStore,
+    bot: &Bot,
+    store: &Arc<Mutex<DedupStore>>,
     policy: &ReplyPolicy,
     config: &WatchConfig,
 ) -> Result<()> {
@@ -368,7 +381,7 @@ pub async fn watch(
             }
         }
         _ => {
-            let watermark = prime_watermark(api, store, config.page_size).await?;
+            let watermark = prime_watermark(bot.puppet().as_ref(), store, config.page_size).await?;
             tracing::info!(
                 "已建立水位线，忽略历史消息。最新 message_id={}",
                 watermark.value()
@@ -380,7 +393,7 @@ pub async fn watch(
     let mut failures = 0u32;
     let mut missing = MissingTracker::default();
     loop {
-        match run_round(api, ai, store, policy, &mut watermark, &mut missing, config).await {
+        match run_round(bot, store, policy, &mut watermark, &mut missing, config).await {
             Ok(round) => {
                 failures = 0;
                 // 水位线落盘：崩了也不丢进度。
