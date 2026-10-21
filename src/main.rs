@@ -14,6 +14,7 @@ use heybot::reply;
 use heybot::store;
 use heybot::watch;
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +28,9 @@ use heybot::error::Error;
 use heybot::provider::XiaoheihePuppet;
 use heybot::puppet::Puppet;
 use heybot::reply::ReplyOutcome;
+
+/// 等会话文件时多久检查一次。
+const SESSION_WAIT_INTERVAL: Duration = Duration::from_secs(15);
 
 fn usage() -> &'static str {
     "用法：
@@ -172,30 +176,59 @@ async fn client() -> Result<HeyboxApi> {
 
 /// 交互式扫码登录，返回可用会话。
 ///
-/// 二维码直接画在终端里；终端不支持半块字符时退回 SVG 文件。
+/// **二维码过期会自动换一张继续显示**——不用守着终端刷新，
+/// 什么时候扫什么时候算数。
 async fn login_interactive() -> Result<heybot::api::Session> {
     let api = HeyboxApi::new(Default::default())?;
-    let qr = auth::fetch_qrcode(&api).await?;
+    let session = auth::login_loop(
+        || async { auth::fetch_qrcode(&api).await },
+        |qr: &auth::QrCode| {
+            let qr = qr.clone();
+            async move { show_qr(&qr) }
+        },
+        |qr: &auth::QrCode| {
+            let qr = qr.clone();
+            let api = &api;
+            async move { auth::wait_for_login(api, &qr).await }
+        },
+    )
+    .await?;
+    Ok(session)
+}
 
+/// 展示一张二维码。
+fn show_qr(qr: &auth::QrCode) {
+    let svg_path = std::env::temp_dir().join(format!("heybot-qr-{}.svg", std::process::id()));
+    println!();
     if let Some(terminal) = render_terminal_qr(&qr.url) {
         println!("{terminal}");
-        println!("请用小黑盒 App 扫描上面的二维码。");
-    } else {
-        let svg = auth::qr_svg(&qr.url)?;
-        let qr_path = std::env::temp_dir().join(format!("heybot-qr-{}.svg", std::process::id()));
-        std::fs::write(&qr_path, svg)?;
+    } else if let Ok(svg) = auth::qr_svg(&qr.url)
+        && std::fs::write(&svg_path, svg).is_ok()
+    {
         println!("当前终端不支持二维码渲染，请打开这个文件：");
-        println!("  {}", qr_path.display());
+        println!("  {}", svg_path.display());
     }
+    println!("请用小黑盒 App 扫描上面的二维码。");
     println!("也可直接打开：{}", qr.url);
-    println!("二维码有效期 {} 秒，等待扫码中…", qr.expire_seconds);
+    println!("有效期 {} 秒，过期会自动换一张。", qr.expire_seconds);
+}
 
-    let result = auth::wait_for_login(&api, &qr).await;
-    let _ = std::fs::remove_file(
-        std::env::temp_dir().join(format!("heybot-qr-{}.svg", std::process::id())),
-    );
-    let result = result?;
-    Ok(result.session)
+/// 当前是不是交互式环境（有 TTY）。
+///
+/// 服务跑在 systemd 下时 stdin 不是终端，画不出二维码也没人扫，
+/// 这时候应该等运维换好会话文件，而不是反复拉二维码。
+fn is_interactive() -> bool {
+    std::io::stdin().is_terminal()
+}
+
+/// 等到收到退出信号（Ctrl-C / SIGTERM / SIGINT）。
+async fn shutdown_signal() {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("注册 SIGTERM 处理器");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
 }
 
 /// 确保有可用会话：已登录就复用，没登录或已失效就扫码。
@@ -220,6 +253,33 @@ async fn ensure_session() -> Result<(heybot::api::Session, String)> {
                 return Ok((session, String::new()));
             }
         }
+    }
+
+    if !is_interactive() {
+        // 服务环境：没有终端，画不出二维码也没人扫。
+        // 不退出、不反复拉二维码——等运维把会话文件换好就行。
+        tracing::error!(
+            "会话已失效，且当前不是交互式环境，无法显示二维码。\n\
+             请 SSH 登录服务器后执行：sudo -u heybot -H {} login\n\
+             换好会话文件后服务会自动恢复，不用重启。",
+            path.display()
+        );
+        let session = tokio::select! {
+            result = auth::wait_for_session(&path, SESSION_WAIT_INTERVAL, |session| async move {
+                match HeyboxApi::new(session) {
+                    Ok(api) => api.restore_login().await.is_ok(),
+                    Err(_) => false,
+                }
+            }) => result?,
+            _ = shutdown_signal() => return Err(Error::Auth.into()),
+        };
+        tracing::info!("会话已更新，继续。");
+        let nickname = HeyboxApi::new(session.clone())?
+            .restore_login()
+            .await
+            .map(|value| value.nickname)
+            .unwrap_or_default();
+        return Ok((session, nickname));
     }
 
     tracing::info!("尚未登录，开始扫码登录。");
@@ -453,14 +513,9 @@ async fn cmd_reply() -> Result<()> {
 }
 
 async fn cmd_watch() -> Result<()> {
-    // 没登录就扫码，登录了就直接常驻。
-    let (session, nickname) = ensure_session().await?;
-    let puppet = XiaoheihePuppet::new(HeyboxApi::new(session)?);
     let ai = AiClient::new(heybot::ai::AiConfig::from_env()?)?;
     let store = Arc::new(Mutex::new(reply::DedupStore::open(store::dedup_path())?));
     let policy = reply::policy_with_prompts();
-    let mut bot = Bot::new(Arc::new(puppet), store.clone());
-    register_auto_reply(&mut bot, &ai, &policy);
 
     let mut config = watch::default_config();
     if let Some(seconds) = heybot::config::number::<u64>("HEYBOT_POLL_SECONDS") {
@@ -482,28 +537,41 @@ async fn cmd_watch() -> Result<()> {
         config.target_missing_retries = retries.clamp(1, 20);
     }
 
-    tracing::info!(
-        "heybot 启动：账号 {nickname}，轮询间隔 {} 秒{}",
-        config.interval.as_secs(),
-        if config.skip_history {
-            "，忽略历史消息"
-        } else {
-            "，会回复历史消息"
-        }
-    );
-    tracing::info!("等待 @ 消息中，Ctrl-C 退出。");
+    // 会话失效时回到循环开头重新拿会话：
+    // 交互环境会重新扫码（二维码自动续期，不用守着刷新）；
+    // 服务环境会等运维把会话文件换好，然后自动接着跑。
+    let result = loop {
+        let (session, nickname) = ensure_session().await?;
+        let puppet = XiaoheihePuppet::new(HeyboxApi::new(session)?);
+        let mut bot = Bot::new(Arc::new(puppet), store.clone());
+        register_auto_reply(&mut bot, &ai, &policy);
 
-    // Ctrl-C 时优雅退出：停止轮询，保存去重记录。
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = sigterm.recv() => {}
-        _ = sigint.recv() => {}
-        result = watch::watch(&bot, &store, &policy, &config) => {
-            result?;
+        tracing::info!(
+            "heybot 启动：账号 {nickname}，轮询间隔 {} 秒{}",
+            config.interval.as_secs(),
+            if config.skip_history {
+                "，忽略历史消息"
+            } else {
+                "，会回复历史消息"
+            }
+        );
+        tracing::info!("等待 @ 消息中，Ctrl-C 退出。");
+
+        // Ctrl-C 时优雅退出：停止轮询，保存去重记录。
+        let outcome = tokio::select! {
+            _ = shutdown_signal() => break Ok(()),
+            result = watch::watch(&bot, &store, &policy, &config) => result,
+        };
+        match outcome {
+            Ok(()) => break Ok(()),
+            Err(Error::Auth) => {
+                tracing::error!("会话失效，重新获取会话…");
+                continue;
+            }
+            Err(error) => break Err(error),
         }
-    }
+    };
+    result?;
 
     store.lock().await.flush()?;
     tracing::info!("已退出，去重记录已保存到 {}", store::dedup_path().display());

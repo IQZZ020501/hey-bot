@@ -16,6 +16,9 @@ pub enum Error {
     #[error("小黑盒限流，已停止请求。")]
     RateLimit,
 
+    #[error("二维码已过期。")]
+    QrExpired,
+
     #[error("协议不兼容：小黑盒返回了预期之外的结构。{0}")]
     Protocol(String),
 

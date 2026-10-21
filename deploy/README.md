@@ -119,15 +119,21 @@ INFO 等待 @ 消息中，Ctrl-C 退出。
 
 ### 会话失效了怎么办
 
-Cookie 过期后服务会进入扫码等待，二维码过期就报错退出，systemd 再拉起——
-于是你会看到每两分钟一轮的「取二维码 → 超时 → 重启」。
+**服务不会死，也不会反复拉二维码。** 会话失效时它会：
 
-恢复：
+1. 在日志里打印一段提示，说明该去哪儿换会话
+2. 每 15 秒检查一次 `session.json`，一旦换好就自动接着跑
+
+恢复步骤——SSH 上去重新登一次：
 
 ```bash
-sudo -u heybot -H /opt/heybot/heybot login   # 重新扫一次
-sudo systemctl restart heybot
+sudo -u heybot -H /opt/heybot/heybot login
 ```
+
+**二维码会自动续期**：过期了马上换一张继续显示，
+不用守着终端刷新，什么时候扫什么时候算数。
+
+换好的 `session.json` 会被服务检测到，**不需要重启服务**。
 
 ### 改配置
 

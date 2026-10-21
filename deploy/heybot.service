@@ -16,7 +16,8 @@ Environment=RUST_LOG=heybot=info
 
 ExecStart=/opt/heybot/heybot watch
 
-# 常驻服务：进程退出就拉起。会话失效时它会反复尝试扫码，
+# 常驻服务：进程退出就拉起。
+# 会话失效时进程不会退出，而是等运维换好 session.json 后自动接着跑，
 # 恢复办法见 README「部署」一节。
 Restart=always
 RestartSec=30

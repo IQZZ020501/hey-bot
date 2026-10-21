@@ -10,6 +10,7 @@
 //!
 //! 凭据只落在本地会话文件，不进仓库、不打日志。
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -41,7 +42,9 @@ pub enum QrState {
     Ready,
     /// 已确认。
     Confirmed,
-    /// 二维码失效。
+    /// 二维码过期，可以换一张继续。
+    Expired,
+    /// 二维码失效（参数错误等，换一张也没用）。
     Failed,
     /// 需要二次验证。
     NeedVerify,
@@ -111,14 +114,22 @@ pub async fn poll_qr_state(api: &HeyboxApi, qr_id: &str) -> Result<(QrState, Val
         .and_then(Value::as_str)
         .unwrap_or("");
 
-    let state = match state {
+    Ok((parse_qr_state(state, message), result))
+}
+
+/// 把服务端返回的 `error` 字段翻译成扫码状态。
+///
+/// `cancel` 是二维码过期，`failed` 是参数错误。实测：
+/// 过期 -> `{"error":"cancel","error_msg":"二维码已过期"}`
+/// 参数错误 -> `{"error":"failed","error_msg":"参数错误"}`
+///
+/// 过期要能换一张继续，所以单独归类，不能和参数错误混在一起。
+pub fn parse_qr_state(state: &str, message: &str) -> QrState {
+    match state {
         "wait" => QrState::Wait,
         "ready" => QrState::Ready,
         "ok" => QrState::Confirmed,
-        // `cancel` 是二维码过期，`failed` 是参数错误。实测：
-        // 过期 -> {"error":"cancel","error_msg":"二维码已过期"}
-        // 参数错误 -> {"error":"failed","error_msg":"参数错误"}
-        "cancel" | "expired" | "expire" => QrState::Failed,
+        "cancel" | "expired" | "expire" => QrState::Expired,
         "failed" => {
             if message.contains("验证") || message.contains("captcha") {
                 QrState::NeedVerify
@@ -126,10 +137,9 @@ pub async fn poll_qr_state(api: &HeyboxApi, qr_id: &str) -> Result<(QrState, Val
                 QrState::Failed
             }
         }
-        // 未知状态按"继续等待"处理，避免因为上游新增状态而中断登录。
+        // 未知状态按「继续等待」处理，避免因为上游新增状态而中断登录。
         _ => QrState::Wait,
-    };
-    Ok((state, result))
+    }
 }
 
 /// 从登录响应里取账号标识。
@@ -236,7 +246,7 @@ pub async fn wait_for_login(api: &HeyboxApi, qr: &QrCode) -> Result<LoginResult>
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if tokio::time::Instant::now() > deadline {
-            return Err(Error::Protocol("等待扫码超时。".into()));
+            return Err(Error::QrExpired);
         }
         let (state, result) = poll_qr_state(api, &qr.qr_id).await?;
         match state {
@@ -266,12 +276,67 @@ pub async fn wait_for_login(api: &HeyboxApi, qr: &QrCode) -> Result<LoginResult>
                 return Ok(LoginResult { session, user_id });
             }
             QrState::NeedVerify => return Err(Error::Captcha),
+            QrState::Expired => {
+                // 过期不是错误，交给上层换一张继续。
+                return Err(Error::QrExpired);
+            }
             QrState::Failed => {
                 return Err(Error::Protocol(
-                    "二维码已失效或状态异常，请重新执行 heybot login。".into(),
+                    "二维码状态异常，请重新执行 heybot login。".into(),
                 ));
             }
         }
+    }
+}
+
+/// 扫码登录主循环。
+///
+/// 二维码过期就**换一张继续显示**——不盯着终端的时候也不会失效，
+/// 什么时候扫什么时候算数。
+///
+/// `fetch` 取二维码、`show` 展示、`wait` 等扫码结果。
+/// 三个动作都做成参数是为了能测（真实实现都要打接口）。
+pub async fn login_loop<FFut, SFut, WFut>(
+    mut fetch: impl FnMut() -> FFut,
+    mut show: impl FnMut(&QrCode) -> SFut,
+    mut wait: impl FnMut(&QrCode) -> WFut,
+) -> Result<Session>
+where
+    FFut: Future<Output = Result<QrCode>>,
+    SFut: Future<Output = ()>,
+    WFut: Future<Output = Result<LoginResult>>,
+{
+    loop {
+        let qr = fetch().await?;
+        show(&qr).await;
+        match wait(&qr).await {
+            Ok(result) => return Ok(result.session),
+            // 过期不是错误，换一张继续。
+            Err(Error::QrExpired) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// 等待会话文件变成可用状态。
+///
+/// 服务跑在 systemd 下时扫不了码：终端里画不出二维码，人也不会守在机器前。
+/// 这个函数代替扫码——定期读会话文件并验证，
+/// 运维换好 `session.json` 之后服务自动恢复，**不用重启进程**。
+///
+/// `verify` 负责判断一个会话是否真的能用，一般是调 `restore_login`。
+/// 返回 `false` 就继续等，不会返回没验证过的会话。
+pub async fn wait_for_session<V, Fut>(path: &Path, interval: Duration, verify: V) -> Result<Session>
+where
+    V: Fn(Session) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    loop {
+        let session = crate::store::load_session(path)?;
+        if !session.cookies.is_empty() && verify(session.clone()).await {
+            return Ok(session);
+        }
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -409,5 +474,89 @@ mod tests {
         assert_eq!(user.as_deref(), Some("42"));
         // 同一个名字不能出现两次。
         assert_eq!(names.iter().filter(|name| **name == "heybox_id").count(), 1);
+    }
+
+    #[test]
+    fn 二维码过期与参数错误要分开() {
+        // 过期：换一张就能继续。
+        assert_eq!(parse_qr_state("cancel", "二维码已过期"), QrState::Expired);
+        assert_eq!(parse_qr_state("expired", ""), QrState::Expired);
+        // 参数错误：换一张也没用。
+        assert_eq!(parse_qr_state("failed", "参数错误"), QrState::Failed);
+        // 需要二次验证是另一回事。
+        assert_eq!(parse_qr_state("failed", "需要验证"), QrState::NeedVerify);
+        // 正常状态。
+        assert_eq!(parse_qr_state("wait", ""), QrState::Wait);
+        assert_eq!(parse_qr_state("ready", ""), QrState::Ready);
+        assert_eq!(parse_qr_state("ok", ""), QrState::Confirmed);
+        // 未知状态按继续等待处理。
+        assert_eq!(parse_qr_state("brand-new", ""), QrState::Wait);
+    }
+
+    #[tokio::test]
+    async fn 二维码过期会自动换一张() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let fetched = Arc::new(AtomicUsize::new(0));
+        let shown = Arc::new(AtomicUsize::new(0));
+        let waited = Arc::new(AtomicUsize::new(0));
+
+        let session = login_loop(
+            {
+                let fetched = fetched.clone();
+                move || {
+                    let fetched = fetched.clone();
+                    async move {
+                        let n = fetched.fetch_add(1, Ordering::SeqCst) + 1;
+                        Ok(QrCode {
+                            url: format!("https://x/?qr={n}"),
+                            qr_id: format!("q{n}"),
+                            expire_seconds: 120,
+                        })
+                    }
+                }
+            },
+            {
+                let shown = shown.clone();
+                move |_qr: &QrCode| {
+                    let shown = shown.clone();
+                    async move {
+                        shown.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            },
+            {
+                let waited = waited.clone();
+                move |_qr: &QrCode| {
+                    let waited = waited.clone();
+                    async move {
+                        // 第一张过期，第二张扫成功。
+                        if waited.fetch_add(1, Ordering::SeqCst) == 0 {
+                            Err(Error::QrExpired)
+                        } else {
+                            Ok(LoginResult {
+                                session: Session {
+                                    cookies: vec![Cookie {
+                                        name: "pkey".into(),
+                                        value: "v".into(),
+                                        domain: ".xiaoheihe.cn".into(),
+                                        path: "/".into(),
+                                    }],
+                                },
+                                user_id: "42".into(),
+                            })
+                        }
+                    }
+                }
+            },
+        )
+        .await
+        .expect("扫码登录成功");
+
+        assert_eq!(fetched.load(Ordering::SeqCst), 2, "过期后要重新取一张");
+        assert_eq!(shown.load(Ordering::SeqCst), 2, "每张都要展示");
+        assert_eq!(waited.load(Ordering::SeqCst), 2, "每张都要等一次");
+        assert_eq!(session.cookies.len(), 1, "返回的是扫成功那张的会话");
     }
 }
