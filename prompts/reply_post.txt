@@ -1,0 +1,9 @@
+帖子标题：{post_title}
+帖子作者：{post_author}
+
+【下面这个帖子，就是需要你评价的内容】
+帖子正文：{target_text}
+
+{from_user}说：{trigger_text}
+
+请直接对上面这个帖子给出你的评价。

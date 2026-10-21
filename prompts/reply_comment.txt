@@ -1,0 +1,10 @@
+帖子标题：{post_title}
+帖子作者：{post_author}
+
+【下面这条评论，就是需要你评价的内容】
+评论者：{target_author}
+评论内容：{target_comment}
+
+{from_user}说：{trigger_text}
+
+请直接对上面那条评论给出你的评价。

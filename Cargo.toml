@@ -1,0 +1,47 @@
+[package]
+name = "heybot"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "heybot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "heybot"
+path = "src/main.rs"
+
+[dependencies]
+reqwest = { version = "0.13", features = [
+    "json",
+    "rustls",
+    "webpki-roots",
+    "cookies",
+    "multipart",
+    "form",
+    "query",
+    "gzip",
+    "charset",
+    "http2",
+], default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "process", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+md-5 = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+url = "2"
+regex = "1"
+rand = "0.9"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+qrcode = { version = "0.14", features = ["svg"] }
+dotenvy = "0.15"
+dirs = "6"
+
+[profile.release]
+strip = true
+lto = "thin"
