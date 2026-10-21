@@ -65,6 +65,9 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
+      # deploy/ 目录要一起发出去，得先把代码拉下来。
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
