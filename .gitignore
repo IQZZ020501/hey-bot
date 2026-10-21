@@ -3,6 +3,8 @@
 vendor/
 # 开发用脚本：本地保留，不入库
 tools/
+# 本地 prompt 覆盖目录：存在则覆盖 src/prompt.rs 里的内置模板
+prompts/
 __pycache__/
 *.pyc
 .venv/

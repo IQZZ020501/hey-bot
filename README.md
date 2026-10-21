@@ -108,7 +108,7 @@ HEYBOT_POLL_SECONDS=5 heybot watch
 | `HEYBOT_WATERMARK_FILE` | 水位线文件路径 | 项目根目录 |
 | `HEYBOT_ENV_FILE` | `.env` 路径 | 见下方查找顺序 |
 | `HEYBOT_HOME` | 一次性指定项目根目录 | 自动探测 |
-| `HEYBOT_PROMPT_DIR` | 一次性指定 prompt 模板目录 | 项目根 `prompts/` |
+| `HEYBOT_PROMPT_DIR` | 一次性指定 prompt 模板目录 | 无（用 `src/prompt.rs` 内置模板） |
 
 `.env` 查找顺序（取第一个存在的）：
 
@@ -215,14 +215,15 @@ HEYBOT_POLL_SECONDS=5 heybot watch
 
 ```
 heybot/
-├── src/            Rust 源码
-├── prompts/        Prompt 模板（system / reply_comment / reply_post）
+├── src/            Rust 源码（prompt 模板在 src/prompt.rs）
 └── .env.example    配置模板
 ```
 
-`tools/`（签名对拍脚本）与 `vendor/`（第三方 Python 参考实现）均不入库：
-签名算法的期望值已固化为 `src/signing.rs` 里的测试向量，
-主程序与 `cargo test` 都不依赖它们。
+`tools/`（签名对拍脚本）、`vendor/`（第三方 Python 参考实现）、
+`prompts/`（可选的本地模板覆盖目录）均不入库。
+Prompt 默认取 `src/prompt.rs` 里的 `DEFAULT_*` 常量；
+想在不重新编译的情况下改风格，自建 `prompts/` 目录放
+`system.txt` / `reply_comment.txt` / `reply_post.txt` 即可覆盖。
 
 ## 参考与致谢
 

@@ -1,12 +1,15 @@
 //! Prompt 模板。
 //!
-//! Prompt 放在独立文件里，改风格不用重新编译。
+//! 模板正文内置在下面的 `DEFAULT_*` 常量里，是唯一事实来源。
 //!
-//! 目录结构（默认 `prompts/`，可用 `HEYBOT_PROMPT_DIR` 覆盖）：
+//! 想改风格又不想重新编译，可以在项目根建一个 `prompts/` 目录
+//! （或用 `HEYBOT_PROMPT_DIR` 指向别处），放同名文件即可覆盖：
 //!
 //! - `system.txt`        —— 人设与语气，发给模型的 system 消息
 //! - `reply_comment.txt` —— 评价**评论**时用的 user 消息
 //! - `reply_post.txt`    —— 评价**帖子**时用的 user 消息
+//!
+//! 目录不存在或缺文件时，一律回落到内置模板。
 //!
 //! 占位符用 `{名字}` 形式，缺失的占位符会替换成空串，
 //! 模板里没出现的占位符不影响。
@@ -257,16 +260,14 @@ mod tests {
     }
 
     #[test]
-    fn shipped_templates_are_valid() {
-        // 仓库里的 prompts/ 目录必须始终可用。
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("prompts");
+    fn missing_directory_falls_back_to_defaults() {
+        // 仓库不附带 prompts/ 目录，缺目录时必须回落到内置模板。
+        let dir = std::env::temp_dir().join(format!("heybot-prompt-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
         let prompts = Prompts::load(&dir);
-        for template in [
-            &prompts.system,
-            &prompts.reply_comment,
-            &prompts.reply_post,
-        ] {
-            validate(template).expect("仓库模板应当有效");
-        }
+        assert_eq!(prompts.system, DEFAULT_SYSTEM);
+        assert_eq!(prompts.reply_comment, DEFAULT_REPLY_COMMENT);
+        assert_eq!(prompts.reply_post, DEFAULT_REPLY_POST);
     }
 }

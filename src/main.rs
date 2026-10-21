@@ -107,7 +107,8 @@ async fn cmd_probe() -> Result<()> {
     Ok(())
 }
 
-/// 构造策略：prompt 从 `prompts/` 目录读，改风格不用重编译。
+/// 构造策略：默认用 `src/prompt.rs` 的内置模板；
+/// 若存在 `prompts/` 目录（或 `HEYBOT_PROMPT_DIR`），则用其覆盖，改风格不用重编译。
 fn policy_with_prompts() -> reply::ReplyPolicy {
     let mut policy = default_policy();
     match heybot::prompt::Prompts::from_config() {
