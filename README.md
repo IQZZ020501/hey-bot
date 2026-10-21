@@ -159,7 +159,7 @@ bot.on_message(|msg| async move {
 
 `msg.say()` 自带幂等：已回复过的消息直接跳过；发送时网络错误记为「结果未知」并写去重表，避免重发。
 
-因为平台行为收敛在 `Puppet` 后面，测试不需要 mock HTTP server——`tests/bot_flow.rs` 用一个内存里的假平台跑完整链路。
+因为平台行为收敛在 `Puppet` 后面，测试不需要 mock HTTP server——`tests/integration/` 用一个内存里的假平台跑完整链路。
 
 ### 常驻模式
 

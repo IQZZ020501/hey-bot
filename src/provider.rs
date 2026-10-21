@@ -4,6 +4,7 @@
 //! 新评论 id 藏在响应的哪一层、回复要带哪些 id。
 
 use async_trait::async_trait;
+use serde_json::Value;
 
 use crate::api::HeyboxApi;
 use crate::context::{self, Context};
@@ -57,11 +58,17 @@ impl Puppet for XiaoheihePuppet {
             .api
             .create_comment(&mention.link_id, text, reply_id, root_id)
             .await?;
-        // 服务端把新评论 id 放在**响应顶层**的 commentid，
-        // result 里只有评论详情。注意它是 JSON 数字。
-        Ok(context::numeric_id(data.get("commentid"))
-            .or_else(|| context::numeric_id(data.pointer("/result/commentid")))
-            .or_else(|| context::numeric_id(data.pointer("/result/comment/comment/0/commentid")))
-            .unwrap_or_default())
+        Ok(extract_comment_id(&data))
     }
+}
+
+/// 从创建评论的响应里取新评论 id。
+///
+/// 服务端把 id 放在**响应顶层**的 `commentid`，不同版本偶尔挪到 `result` 里。
+/// 注意它是 JSON 数字，所以只能按字符串比对。
+pub fn extract_comment_id(data: &Value) -> String {
+    context::numeric_id(data.get("commentid"))
+        .or_else(|| context::numeric_id(data.pointer("/result/commentid")))
+        .or_else(|| context::numeric_id(data.pointer("/result/comment/comment/0/commentid")))
+        .unwrap_or_default()
 }
